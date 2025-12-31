@@ -1,0 +1,98 @@
+# ============================================
+# REMOOTIO AUTOMATIONS
+# ============================================
+# IMPORTANT: Replace placeholder values:
+#   - notify.mobile_app_your_phone → Your actual phone notify service
+#     (Find in Settings → Devices & Services → Mobile App)
+# ============================================
+
+- id: remootio_door_open_alert
+  alias: "Remootio: Door Left Open Alert"
+  description: "Sends push, email, and audible alerts when door is open for 10+ minutes"
+  trigger:
+    - platform: state
+      entity_id: cover.garage_door
+      to: "open"
+      for:
+        minutes: 10
+  condition: []
+  action:
+    - service: script.send_door_open_notifications
+      data:
+        message: "⚠️ ALERT: Garage door has been open for 10 minutes!"
+        urgency: "high"
+    - repeat:
+        sequence:
+          - delay:
+              minutes: 5
+          - condition: state
+            entity_id: cover.garage_door
+            state: "open"
+          - service: script.send_door_open_notifications
+            data:
+              message: "⚠️ REMINDER: Garage door STILL OPEN! ({{ relative_time(states.cover.garage_door.last_changed) }} ago)"
+              urgency: "critical"
+        until:
+          - condition: state
+            entity_id: cover.garage_door
+            state: "closed"
+
+- id: remootio_door_closed_notification
+  alias: "Remootio: Door Closed Notification"
+  description: "Confirms when door is closed after being open a while"
+  trigger:
+    - platform: state
+      entity_id: cover.garage_door
+      from: "open"
+      to: "closed"
+  condition:
+    - condition: template
+      value_template: >
+        {{ (as_timestamp(now()) - as_timestamp(trigger.from_state.last_changed)) > 300 }}
+  action:
+    - service: notify.mobile_app_your_phone  # CHANGE THIS
+      data:
+        message: "✅ Garage door is now closed (was open for {{ relative_time(trigger.from_state.last_changed) }})"
+        title: "Garage Door Closed"
+
+- id: remootio_night_opening_alert
+  alias: "Remootio: Night Opening Alert"
+  description: "Alert if door opens between 10 PM and 6 AM"
+  trigger:
+    - platform: state
+      entity_id: cover.garage_door
+      to: "open"
+  condition:
+    - condition: time
+      after: "22:00:00"
+      before: "06:00:00"
+    - condition: state
+      entity_id: input_boolean.remootio_night_alerts
+      state: "on"
+  action:
+    - service: notify.mobile_app_your_phone  # CHANGE THIS
+      data:
+        message: "🌙 Garage door opened at night ({{ now().strftime('%I:%M %p') }})"
+        title: "Night Activity Alert"
+        data:
+          priority: high
+          channel: alarm_stream
+    - service: notify.email
+      data:
+        title: "🌙 Night Garage Door Activity"
+        message: "The garage door was opened at {{ now().strftime('%I:%M %p') }}"
+
+- id: remootio_daily_summary
+  alias: "Remootio: Daily Summary"
+  description: "Sends daily report of door activity"
+  trigger:
+    - platform: time
+      at: "21:00:00"
+  action:
+    - service: notify.mobile_app_your_phone  # CHANGE THIS
+      data:
+        message: >
+          Today's garage door activity:
+          Opens: {{ states('sensor.remootio_open_count_today') | default('N/A') }}
+          Currently: {{ states('cover.garage_door') }}
+        title: "Daily Garage Report"

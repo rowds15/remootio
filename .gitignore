@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+venv/
+env/
+ENV/
+
+# Home Assistant
+secrets.yaml
+.storage/
+*.db
+*.db-shm
+*.db-wal
+*.log
+home-assistant.log
+home-assistant_v2.db
+*.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Secrets and sensitive data
+*.key
+*.pem
+*.crt
+api_keys.txt
+credentials.json
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+.cache/
+tmp/
+temp/
+archive/
+CLAUDE.md
+
+# OS
+Thumbs.db
+desktop.ini

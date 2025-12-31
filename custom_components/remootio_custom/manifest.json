@@ -1,0 +1,9 @@
+{
+  "domain": "remootio_custom",
+  "name": "Remootio Custom",
+  "documentation": "https://github.com/remootio/remootio-api-documentation",
+  "requirements": ["cryptography>=41.0.0", "websockets"],
+  "codeowners": [],
+  "version": "3.0.0",
+  "iot_class": "local_push"
+}

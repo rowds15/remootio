@@ -1,0 +1,74 @@
+# ============================================
+# REMOOTIO SCRIPTS
+# ============================================
+# IMPORTANT: Replace placeholder values:
+#   - notify.mobile_app_your_phone → Your actual phone notify service
+#   - media_player.your_speaker → Your speaker entity (or remove TTS section)
+# ============================================
+
+send_door_open_notifications:
+  alias: "Send Door Open Notifications"
+  description: "Sends notifications via multiple channels"
+  fields:
+    message:
+      description: "The message to send"
+      example: "Door has been open too long"
+    urgency:
+      description: "Urgency level (normal, high, critical)"
+      example: "high"
+  sequence:
+    # 1. PUSH NOTIFICATION to phone (loud and persistent)
+    - service: notify.mobile_app_your_phone  # CHANGE THIS
+      data:
+        message: "{{ message }}"
+        title: "🚨 Garage Door Alert"
+        data:
+          priority: high
+          ttl: 0
+          channel: alarm_stream
+          importance: high
+          vibrationPattern: "100, 1000, 100, 1000, 100, 1000"
+          ledColor: "red"
+          actions:
+            - action: "CLOSE_DOOR"
+              title: "Close Door Now"
+            - action: "VIEW_CAMERA"
+              title: "View Camera"
+              uri: "/lovelace/0"
+
+    # 2. EMAIL NOTIFICATION
+    - service: notify.email
+      data:
+        title: "🚨 Garage Door Alert - {{ now().strftime('%I:%M %p') }}"
+        message: |
+          {{ message }}
+
+          Time: {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+
+          ⚠️ Please check your garage door immediately.
+
+          --
+          Sent from Home Assistant Remootio Monitor
+
+    # 3. AUDIBLE ALERT - Text-to-Speech (OPTIONAL - remove if no speaker)
+    - service: tts.google_translate_say
+      data:
+        entity_id: media_player.your_speaker  # CHANGE THIS or remove this section
+        message: >
+          {% if urgency == 'critical' %}
+            Urgent alert! The garage door has been left open for an extended period. Please close it immediately.
+          {% else %}
+            Attention. The garage door has been open for 10 minutes. Please check the door.
+          {% endif %}
+        language: "en"
+
+close_garage_door:
+  alias: "Close Garage Door"
+  sequence:
+    - service: cover.close_cover
+      target:
+        entity_id: cover.garage_door
+    - service: notify.mobile_app_your_phone  # CHANGE THIS
+      data:
+        message: "Garage door is closing..."
+        title: "Action Confirmed"

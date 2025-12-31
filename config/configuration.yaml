@@ -1,0 +1,113 @@
+# ============================================
+# REMOOTIO HOME ASSISTANT CONFIGURATION
+# ============================================
+# This is a complete configuration example for Remootio integration
+# Replace placeholder values with your actual information
+# ============================================
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# ============================================
+# EMAIL NOTIFICATIONS
+# ============================================
+# Configure your email server for notifications
+# For Gmail: Use app password from https://myaccount.google.com/apppasswords
+# For internal mail server: Adjust settings as needed
+# ============================================
+notify:
+  - name: email
+    platform: smtp
+    server: smtp.gmail.com  # CHANGE THIS to your mail server
+    port: 587  # CHANGE THIS if needed (Gmail: 587, Internal plain: 25)
+    timeout: 15
+    sender: your.email@gmail.com  # CHANGE THIS
+    encryption: starttls  # Options: starttls, tls, none (use 'none' for internal servers)
+    username: your.email@gmail.com  # CHANGE THIS (not needed for some internal servers)
+    password: YOUR_16_CHAR_APP_PASSWORD  # CHANGE THIS - Gmail app password
+    recipient:  # Can add multiple recipients
+      - your.email@gmail.com  # CHANGE THIS
+      - second.email@example.com  # Add more as needed
+    sender_name: Home Assistant Garage Monitor
+
+# ============================================
+# TEXT-TO-SPEECH
+# ============================================
+# Google Translate TTS for audible announcements
+# ============================================
+tts:
+  - platform: google_translate
+    service_name: google_translate_say
+
+# ============================================
+# REMOOTIO CUSTOM INTEGRATION
+# ============================================
+# Configure your Remootio device
+# Get API keys from Remootio app: Settings → API Access
+# ============================================
+cover:
+  - platform: remootio_custom
+    host: 192.168.1.100  # CHANGE THIS to your Remootio IP address
+    api_secret_key: YOUR_SECRET_KEY  # CHANGE THIS - 64-character hex from Remootio app
+    api_auth_key: YOUR_AUTH_KEY  # CHANGE THIS - 64-character hex from Remootio app
+    name: Garage Door
+
+# ============================================
+# SENSORS FOR TRACKING DOOR ACTIVITY
+# ============================================
+# Track daily door usage statistics
+# ============================================
+sensor:
+  - platform: history_stats
+    name: Remootio Open Count Today
+    entity_id: cover.garage_door
+    state: "open"
+    type: count
+    start: "{{ now().replace(hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Remootio Total Open Time Today
+    entity_id: cover.garage_door
+    state: "open"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+
+# ============================================
+# INPUT HELPERS FOR CUSTOMIZATION
+# ============================================
+# These create UI controls for adjusting alert behavior
+# ============================================
+input_number:
+  remootio_alert_delay:
+    name: Alert Delay (minutes)
+    min: 1
+    max: 30
+    step: 1
+    initial: 10
+    icon: mdi:timer
+    unit_of_measurement: "min"
+
+  remootio_repeat_interval:
+    name: Repeat Alert Every (minutes)
+    min: 1
+    max: 15
+    step: 1
+    initial: 5
+    icon: mdi:timer-refresh
+    unit_of_measurement: "min"
+
+input_boolean:
+  remootio_night_alerts:
+    name: "Night Opening Alerts"
+    initial: true
+    icon: mdi:moon-waning-crescent
