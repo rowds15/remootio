@@ -250,7 +250,6 @@ This project is provided as-is for personal use with Remootio garage door contro
 
 For installation help, see **[INSTALLATION.md](INSTALLATION.md)**
 
-For Claude Code users working with this repository, see **[CLAUDE.md](CLAUDE.md)**
 
 ---
 
