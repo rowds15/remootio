@@ -12,6 +12,16 @@ default_config:
 frontend:
   themes: !include_dir_merge_named themes
 
+# ============================================
+# ENTITY CUSTOMIZATION
+# ============================================
+# Customize entity display names and attributes
+# ============================================
+homeassistant:
+  customize:
+    cover.garage_door:
+      friendly_name: Garage Door
+
 automation: !include automations.yaml
 script: !include scripts.yaml
 scene: !include scenes.yaml
