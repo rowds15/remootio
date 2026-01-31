@@ -10,6 +10,7 @@ Complete Home Assistant integration for Remootio garage door controllers with UI
 - Open/close garage door directly from Home Assistant
 - Real-time door status monitoring
 - WebSocket-based communication for instant updates
+- **Toggle button** for Android Auto / CarPlay compatibility
 
 ### Modern Integration
 - **UI-based setup** - Configure via Home Assistant's Integrations page
@@ -85,8 +86,31 @@ After setup, you'll have:
 | Entity | Type | Description |
 |--------|------|-------------|
 | `cover.garage_door` | Cover | Main door control (open/close/status) |
+| `button.garage_door_toggle` | Button | Toggle button for Android Auto / CarPlay |
 
 The device will appear in your Device Registry with manufacturer "Remootio" and model "Garage Door Controller".
+
+## Android Auto / CarPlay
+
+The integration includes a **Toggle button** entity that works with Android Auto and CarPlay through the Home Assistant Companion App.
+
+### Setup for Android Auto
+
+1. Install the **Home Assistant Companion App** on your Android phone
+2. Open the app and go to **Settings** > **Companion App** > **Android Auto**
+3. Enable Android Auto integration
+4. Add the `button.garage_door_toggle` entity to your Android Auto favorites
+5. The button will appear in Android Auto when connected to your car
+
+### Setup for CarPlay
+
+1. Install the **Home Assistant Companion App** on your iPhone
+2. Open the app and go to **Settings** > **Companion App** > **CarPlay**
+3. Configure which entities appear in CarPlay
+4. Add the `button.garage_door_toggle` entity
+5. The button will appear in CarPlay when connected to your car
+
+**Note:** The toggle button sends a TRIGGER command to the Remootio device, which opens the door if closed or closes it if open (same behavior as the physical button).
 
 ## Automations
 
