@@ -48,7 +48,11 @@ credentials.json
 .cache/
 tmp/
 temp/
+
+# Deprecated files from old YAML-based setup
 archive/
+config/
+INSTALLATION.md
 CLAUDE.md
 
 # OS

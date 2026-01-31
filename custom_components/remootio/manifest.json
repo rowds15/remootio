@@ -1,0 +1,11 @@
+{
+  "domain": "remootio",
+  "name": "Remootio",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/remootio/remootio-api-documentation",
+  "issue_tracker": "https://github.com/remootio/remootio-api-documentation/issues",
+  "iot_class": "local_push",
+  "requirements": ["cryptography>=41.0.0", "websockets>=10.0"],
+  "version": "1.0.0"
+}
