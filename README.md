@@ -81,25 +81,29 @@ The integration will validate your connection and create the cover entity.
 
 ## Entities Created
 
-After setup, you'll have:
+After setup, you'll have entities for **both channels** of your Remootio device:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `cover.garage_door` | Cover | Main door control (open/close/status) |
-| `button.garage_door_toggle` | Button | Toggle button for Android Auto / CarPlay |
+| `cover.garage_door_channel_1` | Cover | Channel 1 door control (open/close/status) |
+| `cover.garage_door_channel_2` | Cover | Channel 2 door control (open/close/status) |
+| `button.garage_door_toggle_channel_1` | Button | Channel 1 toggle for Android Auto / CarPlay |
+| `button.garage_door_toggle_channel_2` | Button | Channel 2 toggle for Android Auto / CarPlay |
 
 The device will appear in your Device Registry with manufacturer "Remootio" and model "Garage Door Controller".
 
+**Note:** If your Remootio device only has one relay/channel, you can ignore or disable the Channel 2 entities.
+
 ## Android Auto / CarPlay
 
-The integration includes a **Toggle button** entity that works with Android Auto and CarPlay through the Home Assistant Companion App.
+The integration includes **Toggle button** entities that work with Android Auto and CarPlay through the Home Assistant Companion App.
 
 ### Setup for Android Auto
 
 1. Install the **Home Assistant Companion App** on your Android phone
 2. Open the app and go to **Settings** > **Companion App** > **Android Auto**
 3. Enable Android Auto integration
-4. Add the `button.garage_door_toggle` entity to your Android Auto favorites
+4. Add `button.garage_door_toggle_channel_1` (and/or channel 2) to your favorites
 5. The button will appear in Android Auto when connected to your car
 
 ### Setup for CarPlay
@@ -107,7 +111,7 @@ The integration includes a **Toggle button** entity that works with Android Auto
 1. Install the **Home Assistant Companion App** on your iPhone
 2. Open the app and go to **Settings** > **Companion App** > **CarPlay**
 3. Configure which entities appear in CarPlay
-4. Add the `button.garage_door_toggle` entity
+4. Add `button.garage_door_toggle_channel_1` (and/or channel 2)
 5. The button will appear in CarPlay when connected to your car
 
 **Note:** The toggle button sends a TRIGGER command to the Remootio device, which opens the door if closed or closes it if open (same behavior as the physical button).

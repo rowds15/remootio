@@ -34,6 +34,7 @@ async def async_setup_entry(
     api_auth_key = entry.data[CONF_API_AUTH_KEY]
     name = entry.data.get(CONF_NAME, DEFAULT_NAME)
 
+    # Create toggle buttons for both channels
     buttons = [
         RemootioButton(
             hass=hass,
@@ -42,7 +43,16 @@ async def async_setup_entry(
             api_secret_key=api_secret_key,
             api_auth_key=api_auth_key,
             entry_id=entry.entry_id,
-            button_type="toggle",
+            relay_number=1,
+        ),
+        RemootioButton(
+            hass=hass,
+            device_name=name,
+            host=host,
+            api_secret_key=api_secret_key,
+            api_auth_key=api_auth_key,
+            entry_id=entry.entry_id,
+            relay_number=2,
         ),
     ]
     async_add_entities(buttons)
@@ -52,6 +62,7 @@ class RemootioButton(ButtonEntity):
     """Button to trigger the Remootio garage door."""
 
     _attr_has_entity_name = True
+    _attr_icon = "mdi:garage"
 
     def __init__(
         self,
@@ -61,7 +72,7 @@ class RemootioButton(ButtonEntity):
         api_secret_key: str,
         api_auth_key: str,
         entry_id: str,
-        button_type: str,
+        relay_number: int = 1,
     ) -> None:
         """Initialize the button."""
         self.hass = hass
@@ -70,11 +81,10 @@ class RemootioButton(ButtonEntity):
         self._api_secret_key = api_secret_key
         self._api_auth_key = api_auth_key
         self._entry_id = entry_id
-        self._button_type = button_type
+        self._relay_number = relay_number
 
-        self._attr_unique_id = f"remootio_{host.replace('.', '_')}_{button_type}"
-        self._attr_name = "Toggle"
-        self._attr_icon = "mdi:garage"
+        self._attr_unique_id = f"remootio_{host.replace('.', '_')}_toggle_ch{relay_number}"
+        self._attr_name = f"Toggle Channel {relay_number}"
 
         # Create a cover instance for sending commands
         self._cover = RemootioCover(
@@ -84,6 +94,7 @@ class RemootioButton(ButtonEntity):
             api_secret_key=api_secret_key,
             api_auth_key=api_auth_key,
             entry_id=entry_id,
+            relay_number=relay_number,
         )
 
     @property
@@ -98,5 +109,9 @@ class RemootioButton(ButtonEntity):
 
     async def async_press(self) -> None:
         """Handle the button press."""
-        _LOGGER.debug("Toggle button pressed for %s", self._device_name)
+        _LOGGER.debug(
+            "Toggle button pressed for %s channel %d",
+            self._device_name,
+            self._relay_number,
+        )
         await self._cover._send_command("TRIGGER")

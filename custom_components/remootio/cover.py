@@ -45,21 +45,34 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Remootio cover from a config entry."""
+    """Set up Remootio covers from a config entry."""
     host = entry.data[CONF_HOST]
     api_secret_key = entry.data[CONF_API_SECRET_KEY]
     api_auth_key = entry.data[CONF_API_AUTH_KEY]
     name = entry.data.get(CONF_NAME, DEFAULT_NAME)
 
-    cover = RemootioCover(
-        hass=hass,
-        name=name,
-        host=host,
-        api_secret_key=api_secret_key,
-        api_auth_key=api_auth_key,
-        entry_id=entry.entry_id,
-    )
-    async_add_entities([cover], True)
+    # Create covers for both channels
+    covers = [
+        RemootioCover(
+            hass=hass,
+            name=name,
+            host=host,
+            api_secret_key=api_secret_key,
+            api_auth_key=api_auth_key,
+            entry_id=entry.entry_id,
+            relay_number=1,
+        ),
+        RemootioCover(
+            hass=hass,
+            name=name,
+            host=host,
+            api_secret_key=api_secret_key,
+            api_auth_key=api_auth_key,
+            entry_id=entry.entry_id,
+            relay_number=2,
+        ),
+    ]
+    async_add_entities(covers, True)
 
 
 def encrypt_frame(
@@ -120,7 +133,6 @@ class RemootioCover(CoverEntity):
     """Representation of a Remootio cover."""
 
     _attr_has_entity_name = True
-    _attr_name = None
     _attr_device_class = CoverDeviceClass.GARAGE
     _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
 
@@ -132,6 +144,7 @@ class RemootioCover(CoverEntity):
         api_secret_key: str,
         api_auth_key: str,
         entry_id: str,
+        relay_number: int = 1,
     ) -> None:
         """Initialize the cover."""
         self.hass = hass
@@ -140,9 +153,11 @@ class RemootioCover(CoverEntity):
         self._api_secret_key = api_secret_key
         self._api_auth_key = api_auth_key
         self._entry_id = entry_id
+        self._relay_number = relay_number
         self._state: str | None = None
         self._available = False
-        self._attr_unique_id = f"remootio_{host.replace('.', '_')}"
+        self._attr_unique_id = f"remootio_{host.replace('.', '_')}_ch{relay_number}"
+        self._attr_name = f"Channel {relay_number}"
         self._session_key: str | None = None
         self._action_id = 0
 
@@ -174,6 +189,11 @@ class RemootioCover(CoverEntity):
     def available(self) -> bool:
         """Return if entity is available."""
         return self._available
+
+    @property
+    def relay_number(self) -> int:
+        """Return the relay number for this cover."""
+        return self._relay_number
 
     async def _send_command(self, command_type: str) -> bool:
         """Send a command to Remootio."""
@@ -222,8 +242,13 @@ class RemootioCover(CoverEntity):
                         )
                         self._action_id = (initial_action_id + 1) % 0x7FFFFFFF
 
+                        # Include relayNumber in the command payload
                         command_payload = {
-                            "action": {"type": command_type, "id": self._action_id}
+                            "action": {
+                                "type": command_type,
+                                "id": self._action_id,
+                                "relayNumber": self._relay_number,
+                            }
                         }
 
                         session_key_bytes = b64decode(session_key_b64)
@@ -241,10 +266,18 @@ class RemootioCover(CoverEntity):
                             "mac": encrypted_command["mac"],
                         }
 
-                        _LOGGER.debug("Command payload: %s", command_payload)
+                        _LOGGER.debug(
+                            "Command payload for relay %d: %s",
+                            self._relay_number,
+                            command_payload,
+                        )
 
                         await websocket.send(json.dumps(encrypted_message))
-                        _LOGGER.debug("Sent %s command", command_type)
+                        _LOGGER.debug(
+                            "Sent %s command to relay %d",
+                            command_type,
+                            self._relay_number,
+                        )
 
                         response = await asyncio.wait_for(websocket.recv(), timeout=5)
                         result = json.loads(response)
