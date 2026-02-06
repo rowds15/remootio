@@ -23,6 +23,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -33,6 +34,7 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
     MODEL,
+    SIGNAL_REMOOTIO_STATE_CHANGED,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -293,8 +295,14 @@ class RemootioCover(CoverEntity):
                             if decrypted_result and decrypted_result.get("response"):
                                 state = decrypted_result["response"].get("state")
                                 if state:
+                                    old_state = self._state
                                     self._state = state
                                     self._available = True
+                                    if old_state is not None and old_state != state:
+                                        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._host}_ch{self._relay_number}"
+                                        async_dispatcher_send(
+                                            self.hass, signal, old_state, state
+                                        )
 
                         return True
 

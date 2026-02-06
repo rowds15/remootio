@@ -10,3 +10,5 @@ DEFAULT_PORT = 8080
 
 MANUFACTURER = "Remootio"
 MODEL = "Garage Door Controller"
+
+SIGNAL_REMOOTIO_STATE_CHANGED = "remootio_state_changed"
