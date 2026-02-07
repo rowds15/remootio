@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import RemootioCoordinator
@@ -31,7 +32,7 @@ async def async_setup_entry(
     )
 
 
-class RemootioButton(ButtonEntity):
+class RemootioButton(CoordinatorEntity[RemootioCoordinator], ButtonEntity):
     """Button to trigger the Remootio garage door."""
 
     _attr_has_entity_name = True
@@ -39,7 +40,7 @@ class RemootioButton(ButtonEntity):
 
     def __init__(self, coordinator: RemootioCoordinator, relay_number: int) -> None:
         """Initialize the button."""
-        self._coordinator = coordinator
+        super().__init__(coordinator)
         self._relay_number = relay_number
         self._attr_unique_id = (
             f"remootio_{coordinator.host.replace('.', '_')}_toggle_ch{relay_number}"
@@ -49,7 +50,7 @@ class RemootioButton(ButtonEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info for device registry."""
-        return self._coordinator.device_info
+        return self.coordinator.device_info
 
     async def async_press(self) -> None:
         """Handle the button press."""
@@ -57,4 +58,4 @@ class RemootioButton(ButtonEntity):
             "Toggle button pressed for channel %d",
             self._relay_number,
         )
-        await self._coordinator.async_trigger(self._relay_number)
+        await self.coordinator.async_trigger(self._relay_number)

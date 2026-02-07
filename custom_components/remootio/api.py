@@ -146,12 +146,16 @@ class RemootioAPI:
 
         # Decrypt challenge
         challenge = decrypt_frame(encrypted_data, self._api_secret_key)
-        if not challenge or not challenge.get("challenge"):
+        if not challenge or not isinstance(challenge.get("challenge"), dict):
             raise InvalidAuth("Failed to decrypt challenge - invalid API keys")
 
-        session_key_b64 = challenge["challenge"]["sessionKey"]
+        challenge_data = challenge["challenge"]
+        if "sessionKey" not in challenge_data:
+            raise InvalidAuth("Missing sessionKey in challenge response")
+
+        session_key_b64 = challenge_data["sessionKey"]
         session_key_hex = b64decode(session_key_b64).hex()
-        initial_action_id = challenge["challenge"].get("initialActionId", 0)
+        initial_action_id = challenge_data.get("initialActionId", 0)
 
         return session_key_hex, initial_action_id
 

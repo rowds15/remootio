@@ -30,7 +30,20 @@ _make_module("homeassistant.core", {
     "HomeAssistant": MagicMock,
     "callback": lambda fn: fn,
 })
-_make_module("homeassistant.config_entries", {"ConfigEntry": MagicMock})
+
+class _ConfigEntry:
+    def __init__(self, *, entry_id="test_entry", data=None):
+        self.entry_id = entry_id
+        self.data = data or {}
+
+_make_module("homeassistant.config_entries", {
+    "ConfigEntry": _ConfigEntry,
+    "ConfigFlow": type("ConfigFlow", (), {
+        "__init_subclass__": classmethod(lambda cls, **kw: None),
+    }),
+    "ConfigFlowResult": dict,
+})
+
 class _Platform:
     COVER = "cover"
     BUTTON = "button"
@@ -43,7 +56,27 @@ _make_module("homeassistant.const", {
 })
 _make_module("homeassistant.exceptions")
 
-# sensor platform
+# --- voluptuous stub (used by config_flow) ---
+class _VolSchema:
+    def __init__(self, schema):
+        self._schema = schema
+
+class _Vol:
+    Schema = _VolSchema
+    @staticmethod
+    def Required(key, **kwargs):
+        return key
+    @staticmethod
+    def Optional(key, **kwargs):
+        return key
+
+_make_module("voluptuous", {
+    "Schema": _VolSchema,
+    "Required": _Vol.Required,
+    "Optional": _Vol.Optional,
+})
+
+# --- sensor platform ---
 class _SensorDeviceClass:
     TIMESTAMP = "timestamp"
 
@@ -75,7 +108,37 @@ _make_module("homeassistant.components.sensor", {
     "SensorStateClass": _SensorStateClass,
 })
 
-# helpers
+# --- cover platform ---
+class _CoverDeviceClass:
+    GARAGE = "garage"
+
+class _CoverEntityFeature:
+    OPEN = 1
+    CLOSE = 2
+
+class _CoverEntity:
+    _attr_has_entity_name = False
+    _attr_unique_id = None
+    _attr_name = None
+    _attr_device_class = None
+    _attr_supported_features = None
+
+_make_module("homeassistant.components.cover", {
+    "CoverDeviceClass": _CoverDeviceClass,
+    "CoverEntity": _CoverEntity,
+    "CoverEntityFeature": _CoverEntityFeature,
+})
+
+# --- button platform ---
+class _ButtonEntity:
+    _attr_has_entity_name = False
+    _attr_unique_id = None
+    _attr_name = None
+    _attr_icon = None
+
+_make_module("homeassistant.components.button", {"ButtonEntity": _ButtonEntity})
+
+# --- helpers ---
 _make_module("homeassistant.helpers")
 
 class _DeviceInfo(dict):
@@ -114,6 +177,14 @@ _make_module("homeassistant.helpers.restore_state", {"RestoreEntity": _RestoreEn
 class _UpdateFailed(Exception):
     pass
 
+class _CoordinatorEntity:
+    """Stub for CoordinatorEntity — stores coordinator reference."""
+    def __init__(self, coordinator):
+        self.coordinator = coordinator
+
+    def __class_getitem__(cls, item):
+        return cls
+
 class _DataUpdateCoordinator:
     def __init__(self, hass, logger, *, name, update_interval):
         self.hass = hass
@@ -121,6 +192,7 @@ class _DataUpdateCoordinator:
         self.name = name
         self.update_interval = update_interval
         self.data = None
+        self.last_update_success = True
 
     def __class_getitem__(cls, item):
         return cls
@@ -128,8 +200,12 @@ class _DataUpdateCoordinator:
     async def async_request_refresh(self):
         await self._async_update_data()
 
+    async def async_config_entry_first_refresh(self):
+        self.data = await self._async_update_data()
+
 _make_module("homeassistant.helpers.update_coordinator", {
     "DataUpdateCoordinator": _DataUpdateCoordinator,
+    "CoordinatorEntity": _CoordinatorEntity,
     "UpdateFailed": _UpdateFailed,
 })
 

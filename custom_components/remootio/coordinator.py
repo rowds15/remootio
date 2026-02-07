@@ -69,11 +69,13 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
                     state = result["response"].get("state")
                     states[relay] = state
                 else:
-                    # Fall back to previous known state on per-relay error
+                    _LOGGER.warning(
+                        "No response for relay %d, keeping previous state", relay
+                    )
                     states[relay] = self._previous_states.get(relay)
                     failures += 1
             except Exception as err:
-                _LOGGER.debug(
+                _LOGGER.warning(
                     "Error querying relay %d: %s, keeping previous state", relay, err
                 )
                 states[relay] = self._previous_states.get(relay)
