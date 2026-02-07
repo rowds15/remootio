@@ -51,7 +51,7 @@ class _RemootioSensorBase(SensorEntity):
         coordinator: RemootioCoordinator,
         relay_number: int,
         uid_suffix: str,
-        name_prefix: str,
+        translation_key_prefix: str,
     ) -> None:
         """Initialize the sensor base."""
         self._coordinator = coordinator
@@ -59,7 +59,7 @@ class _RemootioSensorBase(SensorEntity):
         self._attr_unique_id = (
             f"remootio_{coordinator.host.replace('.', '_')}_{uid_suffix}_ch{relay_number}"
         )
-        self._attr_name = f"{name_prefix} Channel {relay_number}"
+        self._attr_translation_key = f"{translation_key_prefix}_{relay_number}"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -88,7 +88,7 @@ class RemootioOperationCountSensor(RestoreEntity, _RemootioSensorBase):
 
     def __init__(self, coordinator: RemootioCoordinator, relay_number: int) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator, relay_number, "operation_count", "Operation Count")
+        super().__init__(coordinator, relay_number, "operation_count", "operation_count_channel")
         self._count: int = 0
 
     @property
@@ -123,7 +123,7 @@ class RemootioLastOpenedSensor(_RemootioSensorBase):
 
     def __init__(self, coordinator: RemootioCoordinator, relay_number: int) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator, relay_number, "last_opened", "Last Opened")
+        super().__init__(coordinator, relay_number, "last_opened", "last_opened_channel")
         self._timestamp = None
 
     @property
@@ -147,7 +147,7 @@ class RemootioLastClosedSensor(_RemootioSensorBase):
 
     def __init__(self, coordinator: RemootioCoordinator, relay_number: int) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator, relay_number, "last_closed", "Last Closed")
+        super().__init__(coordinator, relay_number, "last_closed", "last_closed_channel")
         self._timestamp = None
 
     @property

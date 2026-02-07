@@ -115,6 +115,27 @@ class TestUniqueIds:
 
         assert actual == expected
 
+    def test_translation_keys(self):
+        """All 6 sensor translation keys follow the expected pattern."""
+        coordinator = _make_coordinator()
+
+        expected = {
+            "operation_count_channel_1",
+            "operation_count_channel_2",
+            "last_opened_channel_1",
+            "last_opened_channel_2",
+            "last_closed_channel_1",
+            "last_closed_channel_2",
+        }
+
+        actual = set()
+        for relay in (1, 2):
+            actual.add(RemootioOperationCountSensor(coordinator, relay)._attr_translation_key)
+            actual.add(RemootioLastOpenedSensor(coordinator, relay)._attr_translation_key)
+            actual.add(RemootioLastClosedSensor(coordinator, relay)._attr_translation_key)
+
+        assert actual == expected
+
 
 # ── device_info delegation ────────────────────────────────────────────────
 

@@ -50,7 +50,7 @@ class RemootioCover(CoordinatorEntity[RemootioCoordinator], CoverEntity):
         self._attr_unique_id = (
             f"remootio_{coordinator.host.replace('.', '_')}_ch{relay_number}"
         )
-        self._attr_name = f"Channel {relay_number}"
+        self._attr_translation_key = f"channel_{relay_number}"
 
     @property
     def device_info(self) -> DeviceInfo:

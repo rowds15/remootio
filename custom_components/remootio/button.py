@@ -45,7 +45,7 @@ class RemootioButton(CoordinatorEntity[RemootioCoordinator], ButtonEntity):
         self._attr_unique_id = (
             f"remootio_{coordinator.host.replace('.', '_')}_toggle_ch{relay_number}"
         )
-        self._attr_name = f"Toggle Channel {relay_number}"
+        self._attr_translation_key = f"toggle_channel_{relay_number}"
 
     @property
     def device_info(self) -> DeviceInfo:

@@ -54,3 +54,10 @@ class TestButtonMetadata:
         coordinator = _make_coordinator()
         button = RemootioButton(coordinator, 1)
         assert button._attr_icon == "mdi:garage"
+
+    def test_translation_keys(self):
+        coordinator = _make_coordinator()
+        button1 = RemootioButton(coordinator, 1)
+        button2 = RemootioButton(coordinator, 2)
+        assert button1._attr_translation_key == "toggle_channel_1"
+        assert button2._attr_translation_key == "toggle_channel_2"

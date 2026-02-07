@@ -71,3 +71,10 @@ class TestCoverMetadata:
         coordinator = _make_coordinator()
         cover = RemootioCover(coordinator, 1)
         assert cover.device_info is coordinator.device_info
+
+    def test_translation_keys(self):
+        coordinator = _make_coordinator()
+        cover1 = RemootioCover(coordinator, 1)
+        cover2 = RemootioCover(coordinator, 2)
+        assert cover1._attr_translation_key == "channel_1"
+        assert cover2._attr_translation_key == "channel_2"
