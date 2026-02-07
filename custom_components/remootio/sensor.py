@@ -9,7 +9,6 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -17,13 +16,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
-from .const import (
-    DEFAULT_NAME,
-    DOMAIN,
-    MANUFACTURER,
-    MODEL,
-    SIGNAL_REMOOTIO_STATE_CHANGED,
-)
+from .const import DOMAIN, SIGNAL_REMOOTIO_STATE_CHANGED
+from .coordinator import RemootioCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,15 +28,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Remootio sensors from a config entry."""
-    host = entry.data[CONF_HOST]
-    name = entry.data.get(CONF_NAME, DEFAULT_NAME)
+    coordinator: RemootioCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     sensors: list[SensorEntity] = []
     for relay_number in (1, 2):
         sensors.extend([
-            RemootioOperationCountSensor(host, name, relay_number),
-            RemootioLastOpenedSensor(host, name, relay_number),
-            RemootioLastClosedSensor(host, name, relay_number),
+            RemootioOperationCountSensor(coordinator, relay_number),
+            RemootioLastOpenedSensor(coordinator, relay_number),
+            RemootioLastClosedSensor(coordinator, relay_number),
         ])
 
     async_add_entities(sensors)
@@ -55,13 +48,12 @@ class RemootioOperationCountSensor(RestoreEntity, SensorEntity):
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_icon = "mdi:counter"
 
-    def __init__(self, host: str, device_name: str, relay_number: int) -> None:
+    def __init__(self, coordinator: RemootioCoordinator, relay_number: int) -> None:
         """Initialize the sensor."""
-        self._host = host
-        self._device_name = device_name
+        self._coordinator = coordinator
         self._relay_number = relay_number
         self._attr_unique_id = (
-            f"remootio_{host.replace('.', '_')}_operation_count_ch{relay_number}"
+            f"remootio_{coordinator.host.replace('.', '_')}_operation_count_ch{relay_number}"
         )
         self._attr_name = f"Operation Count Channel {relay_number}"
         self._count: int = 0
@@ -74,12 +66,7 @@ class RemootioOperationCountSensor(RestoreEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info for device registry."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._host)},
-            name=self._device_name,
-            manufacturer=MANUFACTURER,
-            model=MODEL,
-        )
+        return self._coordinator.device_info
 
     async def async_added_to_hass(self) -> None:
         """Restore state and subscribe to dispatcher signal."""
@@ -92,7 +79,7 @@ class RemootioOperationCountSensor(RestoreEntity, SensorEntity):
             except (ValueError, TypeError):
                 self._count = 0
 
-        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._host}_ch{self._relay_number}"
+        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._coordinator.host}_ch{self._relay_number}"
         self.async_on_remove(
             async_dispatcher_connect(self.hass, signal, self._handle_state_changed)
         )
@@ -112,13 +99,12 @@ class RemootioLastOpenedSensor(SensorEntity):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:garage-open"
 
-    def __init__(self, host: str, device_name: str, relay_number: int) -> None:
+    def __init__(self, coordinator: RemootioCoordinator, relay_number: int) -> None:
         """Initialize the sensor."""
-        self._host = host
-        self._device_name = device_name
+        self._coordinator = coordinator
         self._relay_number = relay_number
         self._attr_unique_id = (
-            f"remootio_{host.replace('.', '_')}_last_opened_ch{relay_number}"
+            f"remootio_{coordinator.host.replace('.', '_')}_last_opened_ch{relay_number}"
         )
         self._attr_name = f"Last Opened Channel {relay_number}"
         self._timestamp = None
@@ -131,16 +117,11 @@ class RemootioLastOpenedSensor(SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info for device registry."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._host)},
-            name=self._device_name,
-            manufacturer=MANUFACTURER,
-            model=MODEL,
-        )
+        return self._coordinator.device_info
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to dispatcher signal."""
-        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._host}_ch{self._relay_number}"
+        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._coordinator.host}_ch{self._relay_number}"
         self.async_on_remove(
             async_dispatcher_connect(self.hass, signal, self._handle_state_changed)
         )
@@ -160,13 +141,12 @@ class RemootioLastClosedSensor(SensorEntity):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:garage"
 
-    def __init__(self, host: str, device_name: str, relay_number: int) -> None:
+    def __init__(self, coordinator: RemootioCoordinator, relay_number: int) -> None:
         """Initialize the sensor."""
-        self._host = host
-        self._device_name = device_name
+        self._coordinator = coordinator
         self._relay_number = relay_number
         self._attr_unique_id = (
-            f"remootio_{host.replace('.', '_')}_last_closed_ch{relay_number}"
+            f"remootio_{coordinator.host.replace('.', '_')}_last_closed_ch{relay_number}"
         )
         self._attr_name = f"Last Closed Channel {relay_number}"
         self._timestamp = None
@@ -179,16 +159,11 @@ class RemootioLastClosedSensor(SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info for device registry."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._host)},
-            name=self._device_name,
-            manufacturer=MANUFACTURER,
-            model=MODEL,
-        )
+        return self._coordinator.device_info
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to dispatcher signal."""
-        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._host}_ch{self._relay_number}"
+        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._coordinator.host}_ch{self._relay_number}"
         self.async_on_remove(
             async_dispatcher_connect(self.hass, signal, self._handle_state_changed)
         )
