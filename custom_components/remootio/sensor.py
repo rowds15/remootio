@@ -30,13 +30,13 @@ async def async_setup_entry(
     """Set up Remootio sensors from a config entry."""
     coordinator: RemootioCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    sensors: list[SensorEntity] = []
-    for relay_number in (1, 2):
-        sensors.extend([
-            RemootioOperationCountSensor(coordinator, relay_number),
-            RemootioLastOpenedSensor(coordinator, relay_number),
-            RemootioLastClosedSensor(coordinator, relay_number),
-        ])
+    # Relay 2 (secondary) has no queryable state in the Remootio API, so
+    # state-change signals for ch2 are never fired.  Only relay 1 gets sensors.
+    sensors: list[SensorEntity] = [
+        RemootioOperationCountSensor(coordinator, relay_number=1),
+        RemootioLastOpenedSensor(coordinator, relay_number=1),
+        RemootioLastClosedSensor(coordinator, relay_number=1),
+    ]
 
     async_add_entities(sensors)
 

@@ -175,11 +175,18 @@ class RemootioAPI:
                 )
                 action_id = (initial_action_id + 1) % 0x7FFFFFFF
 
+                # Remootio API uses separate action types per output.
+                # relay 1 → TRIGGER / QUERY; relay 2 → TRIGGER_SECONDARY (no QUERY variant).
+                api_action_type = (
+                    "TRIGGER_SECONDARY"
+                    if relay_number == 2 and command_type == "TRIGGER"
+                    else command_type
+                )
+
                 command_payload = {
                     "action": {
-                        "type": command_type,
+                        "type": api_action_type,
                         "id": action_id,
-                        "relayNumber": relay_number,
                     }
                 }
 
@@ -203,7 +210,7 @@ class RemootioAPI:
 
                 await websocket.send(json.dumps(encrypted_message))
                 _LOGGER.debug(
-                    "Sent %s command to relay %d", command_type, relay_number
+                    "Sent %s command (relay %d)", api_action_type, relay_number
                 )
 
                 response = await asyncio.wait_for(websocket.recv(), timeout=5)

@@ -48,9 +48,6 @@
     "cover": {
       "channel_1": {
         "name": "Channel 1"
-      },
-      "channel_2": {
-        "name": "Channel 2"
       }
     },
     "button": {
@@ -65,20 +62,11 @@
       "operation_count_channel_1": {
         "name": "Operation Count Channel 1"
       },
-      "operation_count_channel_2": {
-        "name": "Operation Count Channel 2"
-      },
       "last_opened_channel_1": {
         "name": "Last Opened Channel 1"
       },
-      "last_opened_channel_2": {
-        "name": "Last Opened Channel 2"
-      },
       "last_closed_channel_1": {
         "name": "Last Closed Channel 1"
-      },
-      "last_closed_channel_2": {
-        "name": "Last Closed Channel 2"
       }
     }
   }

@@ -28,12 +28,7 @@ async def async_setup_entry(
     """Set up Remootio covers from a config entry."""
     coordinator: RemootioCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    async_add_entities(
-        [
-            RemootioCover(coordinator, relay_number=1),
-            RemootioCover(coordinator, relay_number=2),
-        ]
-    )
+    async_add_entities([RemootioCover(coordinator, relay_number=1)])
 
 
 class RemootioCover(CoordinatorEntity[RemootioCoordinator], CoverEntity):

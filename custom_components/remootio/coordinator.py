@@ -40,7 +40,7 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         )
         self.api = api
         self._device_name = name
-        self._previous_states: dict[int, str | None] = {1: None, 2: None}
+        self._previous_states: dict[int, str | None] = {1: None}
 
     @property
     def host(self) -> str:
@@ -58,40 +58,30 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         )
 
     async def _async_update_data(self) -> dict[int, str | None]:
-        """Query relay 1 then relay 2 sequentially."""
-        states: dict[int, str | None] = {}
-        failures = 0
+        """Query relay 1 only.
 
-        for relay in (1, 2):
-            try:
-                result = await self.api.async_send_command("QUERY", relay)
-                if result and result.get("response"):
-                    state = result["response"].get("state")
-                    states[relay] = state
-                else:
-                    _LOGGER.warning(
-                        "No response for relay %d, keeping previous state", relay
-                    )
-                    states[relay] = self._previous_states.get(relay)
-                    failures += 1
-            except Exception as err:
-                _LOGGER.warning(
-                    "Error querying relay %d: %s, keeping previous state", relay, err
-                )
-                states[relay] = self._previous_states.get(relay)
-                failures += 1
+        The Remootio API has no QUERY_SECONDARY — QUERY always returns the
+        primary output state.  Relay 2 (secondary) has no queryable state.
+        """
+        try:
+            result = await self.api.async_send_command("QUERY", 1)
+        except Exception as err:
+            _LOGGER.warning("Error querying relay 1: %s, keeping previous state", err)
+            raise UpdateFailed("Unable to communicate with Remootio device") from err
 
-        # If both relays failed, raise so CoordinatorEntity marks entities unavailable
-        if failures >= 2:
-            raise UpdateFailed("Unable to communicate with Remootio device")
+        if result and result.get("response"):
+            state = result["response"].get("state")
+        else:
+            _LOGGER.warning("No response for relay 1, keeping previous state")
+            state = self._previous_states.get(1)
 
-        # Fire dispatcher signals on state transitions
-        for relay in (1, 2):
-            old_state = self._previous_states.get(relay)
-            new_state = states[relay]
-            if old_state is not None and new_state is not None and old_state != new_state:
-                signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self.api.host}_ch{relay}"
-                async_dispatcher_send(self.hass, signal, old_state, new_state)
+        states: dict[int, str | None] = {1: state}
+
+        # Fire dispatcher signal on relay 1 state transition
+        old_state = self._previous_states.get(1)
+        if old_state is not None and state is not None and old_state != state:
+            signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self.api.host}_ch1"
+            async_dispatcher_send(self.hass, signal, old_state, state)
 
         self._previous_states = dict(states)
         return states
