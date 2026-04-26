@@ -77,22 +77,28 @@ Complete Home Assistant integration for Remootio garage door controllers with UI
    - **Device Name**: A friendly name (e.g., "Garage Door")
 5. Click **Submit**
 
-The integration will validate your connection and create the cover entity.
+The integration will validate your connection and create all entities automatically.
 
 ## Entities Created
 
-After setup, you'll have entities for **both channels** of your Remootio device:
+After setup, you'll have the following entities:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `cover.garage_door_channel_1` | Cover | Channel 1 door control (open/close/status) |
-| `cover.garage_door_channel_2` | Cover | Channel 2 door control (open/close/status) |
-| `button.garage_door_toggle_channel_1` | Button | Channel 1 toggle for Android Auto / CarPlay |
-| `button.garage_door_toggle_channel_2` | Button | Channel 2 toggle for Android Auto / CarPlay |
+| `cover.garage_door_channel_1` | Cover | Channel 1 — open/close control with status |
+| `button.garage_door_toggle_channel_1` | Button | Channel 1 toggle (Android Auto / CarPlay) |
+| `button.garage_door_toggle_channel_2` | Button | Channel 2 trigger (Android Auto / CarPlay) |
+| `sensor.garage_door_operation_count_channel_1` | Sensor | Number of times channel 1 has opened |
+| `sensor.garage_door_last_opened_channel_1` | Sensor | Timestamp of last channel 1 open |
+| `sensor.garage_door_last_closed_channel_1` | Sensor | Timestamp of last channel 1 close |
 
 The device will appear in your Device Registry with manufacturer "Remootio" and model "Garage Door Controller".
 
-**Note:** If your Remootio device only has one relay/channel, you can ignore or disable the Channel 2 entities.
+### Dual-output devices (e.g. Remootio 3)
+
+Remootio 3 supports two independent control outputs (e.g. a "full open" and a "walk/partial open" connection). The Remootio WebSocket API uses separate action types for each output (`TRIGGER` for the primary, `TRIGGER_SECONDARY` for the secondary) and provides no queryable state for the secondary output.
+
+For this reason, **Channel 2 is exposed as a button only** — pressing it fires `TRIGGER_SECONDARY` on the device, identical to pressing the second button in the Remootio app. Channel 1 remains a full cover entity with open/closed state tracking.
 
 ## Android Auto / CarPlay
 
@@ -114,7 +120,7 @@ The integration includes **Toggle button** entities that work with Android Auto 
 4. Add `button.garage_door_toggle_channel_1` (and/or channel 2)
 5. The button will appear in CarPlay when connected to your car
 
-**Note:** The toggle button sends a TRIGGER command to the Remootio device, which opens the door if closed or closes it if open (same behavior as the physical button).
+**Note:** The toggle buttons send a TRIGGER (channel 1) or TRIGGER_SECONDARY (channel 2) command — identical to pressing the corresponding button in the Remootio app.
 
 ## Automations
 
@@ -187,11 +193,15 @@ To update your device settings:
 - Regenerate the keys in the Remootio app if needed
 - Ensure you haven't swapped the Secret and Auth keys
 
+### No Entities After Update
+
+After updating integration files on disk, Home Assistant must be **fully restarted** (not just reload the integration or remove/re-add it) to load the new code. Remove and re-add the integration only after restarting HA.
+
 ### Door Status Not Updating
 
 - Check WebSocket connection in Home Assistant logs
 - Verify the Remootio device is online
-- Try removing and re-adding the integration
+- Restart Home Assistant, then remove and re-add the integration if needed
 
 ### Logs
 
