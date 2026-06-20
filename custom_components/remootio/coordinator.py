@@ -71,6 +71,8 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
 
     async def _handle_event_state_change(self, state: str) -> None:
         """Handle a real-time StateChange event from the listener."""
+        if state is None:
+            return
         old_state = self._previous_states.get(1)
         if old_state == state:
             return

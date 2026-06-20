@@ -206,6 +206,7 @@ class _DataUpdateCoordinator:
     def async_set_updated_data(self, data) -> None:
         self.data = data
         self.last_update_success = True
+        self.async_update_listeners()
 
     def async_update_listeners(self) -> None:
         pass
