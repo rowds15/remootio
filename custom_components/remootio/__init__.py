@@ -36,6 +36,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         name=entry.data.get(CONF_NAME, DEFAULT_NAME),
     )
     await coordinator.async_config_entry_first_refresh()
+    await coordinator.async_start_event_listener()
+    entry.async_on_unload(coordinator.async_stop_event_listener)
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
