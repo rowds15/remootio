@@ -1,7 +1,7 @@
 """Tests for custom_components.remootio.coordinator."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -116,6 +116,91 @@ class TestAsyncTrigger:
             await mock_coordinator.async_trigger(1)
 
         mock_coordinator.api.async_send_command.assert_any_call("TRIGGER", 1)
+
+
+class TestEventListenerLifecycle:
+    """Tests for listener start/stop methods."""
+
+    @pytest.mark.asyncio
+    async def test_async_start_event_listener_creates_listener(self, mock_coordinator):
+        """async_start_event_listener creates and starts a RemootioEventListener."""
+        mock_listener = MagicMock()
+        mock_listener.async_start = AsyncMock()
+
+        with patch(
+            "custom_components.remootio.coordinator.RemootioEventListener",
+            return_value=mock_listener,
+        ) as mock_cls:
+            await mock_coordinator.async_start_event_listener()
+
+        mock_cls.assert_called_once_with(
+            mock_coordinator.api, mock_coordinator._handle_event_state_change
+        )
+        mock_listener.async_start.assert_awaited_once()
+        assert mock_coordinator._listener is mock_listener
+
+    @pytest.mark.asyncio
+    async def test_async_stop_event_listener_stops_and_clears(self, mock_coordinator):
+        """async_stop_event_listener stops the listener and sets _listener to None."""
+        mock_listener = MagicMock()
+        mock_listener.async_stop = AsyncMock()
+        mock_coordinator._listener = mock_listener
+
+        await mock_coordinator.async_stop_event_listener()
+
+        mock_listener.async_stop.assert_awaited_once()
+        assert mock_coordinator._listener is None
+
+    @pytest.mark.asyncio
+    async def test_async_stop_event_listener_noop_when_none(self, mock_coordinator):
+        """async_stop_event_listener does nothing if no listener is running."""
+        mock_coordinator._listener = None
+        await mock_coordinator.async_stop_event_listener()  # must not raise
+
+
+class TestHandleEventStateChange:
+    """Tests for the real-time event callback."""
+
+    @pytest.mark.asyncio
+    async def test_state_change_updates_data_and_fires_signal(self, mock_coordinator):
+        """New state updates coordinator.data and fires dispatcher signal."""
+        mock_coordinator._previous_states = {1: "closed"}
+        mock_coordinator.data = {1: "closed"}
+
+        with patch("custom_components.remootio.coordinator.async_dispatcher_send") as mock_send:
+            await mock_coordinator._handle_event_state_change("open")
+
+        assert mock_coordinator.data[1] == "open"
+        assert mock_coordinator._previous_states[1] == "open"
+        mock_send.assert_called_once_with(
+            mock_coordinator.hass,
+            f"remootio_state_changed_{TEST_HOST}_ch1",
+            "closed",
+            "open",
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_signal_when_state_unchanged(self, mock_coordinator):
+        """No dispatcher signal when event delivers same state as current."""
+        mock_coordinator._previous_states = {1: "open"}
+        mock_coordinator.data = {1: "open"}
+
+        with patch("custom_components.remootio.coordinator.async_dispatcher_send") as mock_send:
+            await mock_coordinator._handle_event_state_change("open")
+
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_signal_on_first_event_when_previous_none(self, mock_coordinator):
+        """First event (previous state is None) updates data but fires no signal."""
+        mock_coordinator._previous_states = {1: None}
+        mock_coordinator.data = {}
+
+        with patch("custom_components.remootio.coordinator.async_dispatcher_send") as mock_send:
+            await mock_coordinator._handle_event_state_change("open")
+
+        assert mock_coordinator.data[1] == "open"
+        mock_send.assert_not_called()
 
 
 class TestDeviceInfo:

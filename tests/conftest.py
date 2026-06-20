@@ -203,6 +203,13 @@ class _DataUpdateCoordinator:
     async def async_config_entry_first_refresh(self):
         self.data = await self._async_update_data()
 
+    def async_set_updated_data(self, data) -> None:
+        self.data = data
+        self.last_update_success = True
+
+    def async_update_listeners(self) -> None:
+        pass
+
 _make_module("homeassistant.helpers.update_coordinator", {
     "DataUpdateCoordinator": _DataUpdateCoordinator,
     "CoordinatorEntity": _CoordinatorEntity,

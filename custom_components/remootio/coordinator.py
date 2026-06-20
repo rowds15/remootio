@@ -9,7 +9,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import RemootioAPI
+from .api import RemootioAPI, RemootioEventListener
 from .const import (
     DOMAIN,
     MANUFACTURER,
@@ -23,7 +23,7 @@ UPDATE_INTERVAL = timedelta(seconds=30)
 
 
 class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
-    """Coordinator that polls both relays and fires dispatcher signals on transitions."""
+    """Coordinator that polls relay 1 and maintains a real-time event listener."""
 
     def __init__(
         self,
@@ -41,6 +41,7 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         self.api = api
         self._device_name = name
         self._previous_states: dict[int, str | None] = {1: None}
+        self._listener: RemootioEventListener | None = None
 
     @property
     def host(self) -> str:
@@ -56,6 +57,32 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
             manufacturer=MANUFACTURER,
             model=MODEL,
         )
+
+    async def async_start_event_listener(self) -> None:
+        """Create and start the persistent WebSocket event listener."""
+        self._listener = RemootioEventListener(self.api, self._handle_event_state_change)
+        await self._listener.async_start()
+
+    async def async_stop_event_listener(self) -> None:
+        """Stop the persistent WebSocket event listener."""
+        if self._listener:
+            await self._listener.async_stop()
+            self._listener = None
+
+    async def _handle_event_state_change(self, state: str) -> None:
+        """Handle a real-time StateChange event from the listener."""
+        old_state = self._previous_states.get(1)
+        if old_state == state:
+            return
+
+        self._previous_states[1] = state
+        new_data = dict(self.data or {})
+        new_data[1] = state
+        self.async_set_updated_data(new_data)
+
+        if old_state is not None:
+            signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self.api.host}_ch1"
+            async_dispatcher_send(self.hass, signal, old_state, state)
 
     async def _async_update_data(self) -> dict[int, str | None]:
         """Query relay 1 only.
@@ -77,7 +104,6 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
 
         states: dict[int, str | None] = {1: state}
 
-        # Fire dispatcher signal on relay 1 state transition
         old_state = self._previous_states.get(1)
         if old_state is not None and state is not None and old_state != state:
             signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self.api.host}_ch1"
