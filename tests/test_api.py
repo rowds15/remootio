@@ -192,3 +192,174 @@ class TestAsyncValidateConnection:
         with patch("custom_components.remootio.api.websockets.connect", return_value=mock_connect):
             with pytest.raises(CannotConnect):
                 await api.async_validate_connection()
+
+
+# ── RemootioEventListener ──────────────────────────────────────────────────
+
+class AsyncIterMock:
+    """Async iterator mock for websocket message streams."""
+    def __init__(self, items):
+        self._items = iter(items)
+    def __aiter__(self):
+        return self
+    async def __anext__(self):
+        try:
+            return next(self._items)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+class TestRemootioEventListener:
+    """Tests for RemootioEventListener."""
+
+    def _make_listener(self, callback=None):
+        from custom_components.remootio.api import RemootioEventListener
+        api = RemootioAPI(TEST_HOST, TEST_SECRET_KEY, TEST_AUTH_KEY)
+        cb = callback or AsyncMock()
+        return RemootioEventListener(api, cb), cb
+
+    def _make_auth_response(self):
+        """Build the encrypted auth challenge frame the device sends."""
+        challenge_payload = {
+            "challenge": {
+                "sessionKey": b64encode(bytes.fromhex(TEST_SECRET_KEY)).decode(),
+                "initialActionId": 0,
+            }
+        }
+        enc = encrypt_frame(challenge_payload, TEST_SECRET_KEY, TEST_AUTH_KEY)
+        return json.dumps({
+            "type": "ENCRYPTED",
+            "data": {"iv": enc["iv"], "payload": enc["payload"]},
+            "mac": enc["mac"],
+        })
+
+    def _make_state_change_frame(self, state: str, cnt: int, session_key: str = TEST_SECRET_KEY):
+        """Build an encrypted StateChange event frame."""
+        event_payload = {"event": {"cnt": cnt, "type": "StateChange", "state": state, "t100ms": 1000}}
+        enc = encrypt_frame(event_payload, session_key, TEST_AUTH_KEY)
+        return json.dumps({
+            "type": "ENCRYPTED",
+            "data": {"iv": enc["iv"], "payload": enc["payload"]},
+            "mac": enc["mac"],
+        })
+
+    def _make_ws_mock(self, frames):
+        """Build a websocket mock that yields the given frames on async iteration."""
+        ws_mock = AsyncMock()
+        ws_mock.send = AsyncMock()
+        ws_mock.recv = AsyncMock(return_value=self._make_auth_response())
+        ws_mock.__aiter__ = MagicMock(return_value=AsyncIterMock(frames))
+        return ws_mock
+
+    def _make_connect_ctx(self, ws_mock):
+        """Wrap ws_mock in an async context manager."""
+        connect_ctx = MagicMock()
+        connect_ctx.__aenter__ = AsyncMock(return_value=ws_mock)
+        connect_ctx.__aexit__ = AsyncMock(return_value=False)
+        return connect_ctx
+
+    @pytest.mark.asyncio
+    async def test_delivers_state_change_event(self):
+        """StateChange event calls the callback with the new state string."""
+        listener, callback = self._make_listener()
+        ws_mock = self._make_ws_mock([self._make_state_change_frame("open", cnt=1)])
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        callback.assert_awaited_once_with("open")
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_statechange_events(self):
+        """Non-StateChange event types are silently ignored."""
+        listener, callback = self._make_listener()
+        relay_trigger_payload = {"event": {"cnt": 1, "type": "RelayTrigger", "state": "open", "t100ms": 1000}}
+        enc = encrypt_frame(relay_trigger_payload, TEST_SECRET_KEY, TEST_AUTH_KEY)
+        relay_frame = json.dumps({
+            "type": "ENCRYPTED",
+            "data": {"iv": enc["iv"], "payload": enc["payload"]},
+            "mac": enc["mac"],
+        })
+        ws_mock = self._make_ws_mock([relay_frame])
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        callback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ignores_no_sensor_state(self):
+        """'no sensor' state events are not delivered to the callback."""
+        listener, callback = self._make_listener()
+        ws_mock = self._make_ws_mock([self._make_state_change_frame("no sensor", cnt=1)])
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        callback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_already_seen_cnt(self):
+        """Events with cnt <= last_seen_cnt are skipped (replay buffer dedup)."""
+        listener, callback = self._make_listener()
+        listener._last_event_cnt = 10
+
+        frames = [
+            self._make_state_change_frame("open", cnt=5),
+            self._make_state_change_frame("closed", cnt=10),
+            self._make_state_change_frame("open", cnt=11),
+        ]
+        ws_mock = self._make_ws_mock(frames)
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        callback.assert_awaited_once_with("open")
+        assert listener._last_event_cnt == 11
+
+    @pytest.mark.asyncio
+    async def test_processes_event_after_device_restart(self):
+        """cnt gap > 50 below last_seen_cnt is treated as device restart — event is delivered."""
+        listener, callback = self._make_listener()
+        listener._last_event_cnt = 90
+
+        ws_mock = self._make_ws_mock([self._make_state_change_frame("closed", cnt=1)])
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        callback.assert_awaited_once_with("closed")
+
+    @pytest.mark.asyncio
+    async def test_async_stop_cancels_task(self):
+        """async_stop cancels the running listener task."""
+        listener, callback = self._make_listener()
+
+        async def _forever():
+            await asyncio.sleep(9999)
+
+        listener._task = asyncio.ensure_future(_forever())
+        await listener.async_stop()
+
+        assert listener._task is None
+
+    @pytest.mark.asyncio
+    async def test_listen_loop_reconnects_on_error(self):
+        """_listen_loop retries after _connect_and_listen raises, then stops."""
+        listener, callback = self._make_listener()
+
+        call_count = 0
+
+        async def _fail_twice():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise OSError("connection refused")
+            listener._stop_event.set()
+
+        listener._connect_and_listen = _fail_twice
+        listener._BACKOFF_INITIAL = 0
+
+        await listener._listen_loop()
+
+        assert call_count == 3

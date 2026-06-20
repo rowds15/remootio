@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
 import logging
 import secrets
 from base64 import b64decode, b64encode
+from collections.abc import Awaitable, Callable
 
 import websockets
 from cryptography.hazmat.backends import default_backend
@@ -78,6 +80,101 @@ def decrypt_frame(encrypted_frame: dict, key: str) -> dict | None:
     except Exception as err:
         _LOGGER.error("Decryption error: %s", err)
         return None
+
+
+class RemootioEventListener:
+    """Persistent WebSocket listener that delivers real-time StateChange events.
+
+    Maintains an authenticated connection and calls *on_state_change* whenever
+    a StateChange event arrives.  Reconnects automatically with exponential
+    backoff.  Tracks event counters across reconnections to skip replayed
+    events from the device's 100-event buffer.
+    """
+
+    _BACKOFF_INITIAL = 5
+    _BACKOFF_MAX = 60
+
+    def __init__(
+        self,
+        api: RemootioAPI,
+        on_state_change: Callable[[str], Awaitable[None]],
+    ) -> None:
+        self._api = api
+        self._on_state_change = on_state_change
+        self._task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
+        self._last_event_cnt: int = -1
+
+    async def async_start(self) -> None:
+        """Start the background listener task."""
+        self._stop_event.clear()
+        self._task = asyncio.ensure_future(self._listen_loop())
+
+    async def async_stop(self) -> None:
+        """Stop the background listener task and wait for it to exit."""
+        self._stop_event.set()
+        if self._task:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+
+    async def _listen_loop(self) -> None:
+        """Reconnect loop with exponential backoff."""
+        backoff = self._BACKOFF_INITIAL
+        while not self._stop_event.is_set():
+            try:
+                await self._connect_and_listen()
+                backoff = self._BACKOFF_INITIAL
+            except asyncio.CancelledError:
+                return
+            except Exception as err:
+                _LOGGER.warning(
+                    "Remootio event listener error (%s): %s — retrying in %ss",
+                    self._api.host,
+                    err,
+                    backoff,
+                )
+
+            if self._stop_event.is_set():
+                return
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+                return
+            except asyncio.TimeoutError:
+                backoff = min(backoff * 2, self._BACKOFF_MAX)
+
+    async def _connect_and_listen(self) -> None:
+        """Authenticate then consume events until the connection drops."""
+        uri = f"ws://{self._api._host}:{self._api._port}"
+        async with websockets.connect(uri, ping_interval=20, ping_timeout=10) as websocket:
+            session_key_hex, _ = await self._api._async_authenticate(websocket)
+            _LOGGER.debug("Event listener authenticated to %s", self._api.host)
+
+            async for raw in websocket:
+                frame = json.loads(raw)
+                if frame.get("type") != "ENCRYPTED":
+                    continue
+
+                decrypted = decrypt_frame(frame.get("data", frame), session_key_hex)
+                if not decrypted:
+                    continue
+
+                event = decrypted.get("event", {})
+                if event.get("type") != "StateChange":
+                    continue
+
+                state = event.get("state")
+                if not state or state == "no sensor":
+                    continue
+
+                cnt = event.get("cnt", -1)
+                # Skip replayed events; large backward jump means device restarted.
+                if cnt <= self._last_event_cnt and (self._last_event_cnt - cnt) < 50:
+                    continue
+
+                self._last_event_cnt = cnt
+                await self._on_state_change(state)
 
 
 class RemootioAPI:
