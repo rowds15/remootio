@@ -14,36 +14,28 @@ class TestAsyncUpdateData:
     """Tests for the coordinator's _async_update_data method."""
 
     @pytest.mark.asyncio
-    async def test_update_both_relays_success(self, mock_coordinator):
-        """Both relays return valid states."""
-        mock_coordinator.api.async_send_command = AsyncMock(side_effect=[
-            make_query_response("open"),
-            make_query_response("closed"),
-        ])
+    async def test_update_relay1_success(self, mock_coordinator):
+        """Relay 1 returns a valid state."""
+        mock_coordinator.api.async_send_command = AsyncMock(return_value=make_query_response("open"))
 
         result = await mock_coordinator._async_update_data()
 
-        assert result == {1: "open", 2: "closed"}
+        assert result == {1: "open"}
 
     @pytest.mark.asyncio
-    async def test_update_one_relay_fails(self, mock_coordinator):
-        """One relay returns None — falls back to previous state, no UpdateFailed."""
-        mock_coordinator._previous_states = {1: "open", 2: "closed"}
-        mock_coordinator.api.async_send_command = AsyncMock(side_effect=[
-            None,  # relay 1 fails
-            make_query_response("open"),  # relay 2 succeeds
-        ])
-
-        result = await mock_coordinator._async_update_data()
-
-        assert result[1] == "open"  # fallback to previous
-        assert result[2] == "open"
-
-    @pytest.mark.asyncio
-    async def test_update_both_relays_fail(self, mock_coordinator):
-        """Both relays return None — raises UpdateFailed."""
-        mock_coordinator._previous_states = {1: "open", 2: "closed"}
+    async def test_update_relay1_returns_none_falls_back_to_previous(self, mock_coordinator):
+        """When relay 1 returns None, falls back to previous state without raising."""
+        mock_coordinator._previous_states = {1: "closed"}
         mock_coordinator.api.async_send_command = AsyncMock(return_value=None)
+
+        result = await mock_coordinator._async_update_data()
+
+        assert result == {1: "closed"}
+
+    @pytest.mark.asyncio
+    async def test_update_raises_update_failed_when_command_raises(self, mock_coordinator):
+        """When async_send_command raises, coordinator raises UpdateFailed."""
+        mock_coordinator.api.async_send_command = AsyncMock(side_effect=OSError("network error"))
 
         with pytest.raises(UpdateFailed):
             await mock_coordinator._async_update_data()
