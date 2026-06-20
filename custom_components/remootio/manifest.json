@@ -5,8 +5,8 @@
   "config_flow": true,
   "documentation": "https://github.com/remootio/remootio-api-documentation",
   "issue_tracker": "https://github.com/remootio/remootio-api-documentation/issues",
-  "iot_class": "local_polling",
+  "iot_class": "local_push",
   "requirements": ["cryptography>=41.0.0", "websockets>=10.0"],
-  "version": "2.5.1",
+  "version": "2.6.0",
   "homeassistant": "2023.1.0"
 }
