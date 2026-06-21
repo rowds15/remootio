@@ -91,7 +91,15 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
 
         The Remootio API has no QUERY_SECONDARY — QUERY always returns the
         primary output state.  Relay 2 (secondary) has no queryable state.
+
+        Skips the network call when the event listener is active: the device
+        only accepts one WebSocket connection at a time, so opening a second
+        connection for polling would time out while the listener holds the
+        persistent one.
         """
+        if self._listener is not None:
+            return dict(self._previous_states)
+
         try:
             result = await self.api.async_send_command("QUERY", 1)
         except Exception as err:
