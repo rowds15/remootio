@@ -199,9 +199,13 @@ After updating integration files on disk, Home Assistant must be **fully restart
 
 ### Door Status Not Updating
 
-- Check WebSocket connection in Home Assistant logs
-- Verify the Remootio device is online
-- Restart Home Assistant, then remove and re-add the integration if needed
+The integration maintains a persistent WebSocket connection that receives `StateChange` events in real time (no polling delay). If the connection drops, it reconnects automatically with exponential backoff — you should see door state update within seconds of a reconnect without any manual intervention.
+
+If state stops updating:
+- Check Home Assistant logs for `remootio` — reconnect attempts are logged at warning level
+- Verify the Remootio device is online and reachable on port 8080
+- A 30-second polling fallback is always active, so state will self-correct even if the event listener is temporarily down
+- If the issue persists after several minutes, restart Home Assistant and remove/re-add the integration
 
 ### Logs
 
@@ -222,6 +226,8 @@ logger:
 - HMAC-SHA256 authentication
 - Challenge-response authentication flow
 - Session-based encryption keys
+- `local_push` integration: a persistent authenticated WebSocket connection receives `StateChange` events in real time; 30-second polling runs as a fallback
+- Automatic reconnection with exponential backoff (5s → 10s → … → 60s cap); replayed events from the device's 100-event buffer are deduplicated by event counter
 
 ### Dependencies
 - `cryptography` (included in Home Assistant Core)
