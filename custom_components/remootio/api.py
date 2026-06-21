@@ -147,7 +147,7 @@ class RemootioEventListener:
     async def _connect_and_listen(self) -> None:
         """Authenticate then consume events until the connection drops."""
         uri = f"ws://{self._api._host}:{self._api._port}"
-        async with websockets.connect(uri, ping_interval=20, ping_timeout=10) as websocket:
+        async with websockets.connect(uri, ping_interval=None) as websocket:
             session_key_hex, _ = await self._api._async_authenticate(websocket)
             _LOGGER.debug("Event listener authenticated to %s", self._api.host)
 
