@@ -123,6 +123,14 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         return states
 
     async def async_trigger(self, relay_number: int) -> None:
-        """Send TRIGGER command and request a data refresh."""
-        await self.api.async_send_command("TRIGGER", relay_number)
-        await self.async_request_refresh()
+        """Send TRIGGER command and request a data refresh.
+
+        Stops the event listener first so the TRIGGER gets exclusive WebSocket
+        access — the device rejects a second concurrent connection.
+        """
+        await self.async_stop_event_listener()
+        try:
+            await self.api.async_send_command("TRIGGER", relay_number)
+            await self.async_request_refresh()
+        finally:
+            await self.async_start_event_listener()

@@ -2,37 +2,47 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
-Complete Home Assistant integration for Remootio garage door controllers with UI-based configuration, device registry support, and advanced monitoring capabilities.
+Complete Home Assistant integration for Remootio garage door controllers with UI-based configuration, device registry support, real-time push updates, and advanced monitoring capabilities.
 
 ## Features
 
 ### Full Door Control
 - Open/close garage door directly from Home Assistant
-- Real-time door status monitoring
-- WebSocket-based communication for instant updates
+- Real-time door status via persistent WebSocket event listener (`local_push`)
 - **Toggle button** for Android Auto / CarPlay compatibility
 
+### Real-Time Updates
+- Persistent authenticated WebSocket connection receives `StateChange` events instantly — no polling delay
+- Automatic reconnection with exponential backoff (5 s → 10 s → … → 60 s cap)
+- Replayed events from the device's 100-event buffer are deduplicated by event counter
+- Falls back to 30-second polling only when the event listener is not connected
+
 ### Modern Integration
-- **UI-based setup** - Configure via Home Assistant's Integrations page
-- **HACS support** - Easy installation and updates
-- **Device Registry** - Proper device and entity management
-- **Reconfiguration** - Update settings without removing the integration
+- **UI-based setup** — Configure via Home Assistant's Integrations page
+- **HACS support** — Easy installation and updates
+- **Device Registry** — Proper device and entity management
+- **Reconfiguration** — Update settings without removing the integration
+- **Diagnostics** — Download a redacted diagnostics report from the HA UI for troubleshooting
+
+### Activity Tracking
+- **Operation count** — persistent counter of how many times channel 1 has opened (survives HA restarts)
+- **Last opened / last closed** — UTC timestamps updated on every state transition
 
 ### Multi-Channel Alerts (via automations)
-- **Push notifications** - Loud, persistent alerts on your phone
-- **Email notifications** - Detailed alerts with timestamps
-- **Voice announcements** - Text-to-speech alerts via smart speakers
+- **Push notifications** — Loud, persistent alerts on your phone
+- **Email notifications** — Detailed alerts with timestamps
+- **Voice announcements** — Text-to-speech alerts via smart speakers
 
 ### Smart Monitoring (via automations)
-- **Left Open Alerts** - Notification when door is left open
-- **Night Alerts** - Special notifications for nighttime activity
-- **Daily Summaries** - Daily report of door activity
+- **Left Open Alerts** — Notification when door is left open
+- **Night Alerts** — Special notifications for nighttime activity
+- **Daily Summaries** — Daily report of door activity
 
 ## Requirements
 
 - **Home Assistant** 2023.1 or newer
 - **Remootio device** (any model with API support)
-- **HACS** (Home Assistant Community Store) - for easy installation
+- **HACS** (Home Assistant Community Store) — for easy installation
 
 ## Installation
 
@@ -88,7 +98,7 @@ After setup, you'll have the following entities:
 | `cover.garage_door_channel_1` | Cover | Channel 1 — open/close control with status |
 | `button.garage_door_toggle_channel_1` | Button | Channel 1 toggle (Android Auto / CarPlay) |
 | `button.garage_door_toggle_channel_2` | Button | Channel 2 trigger (Android Auto / CarPlay) |
-| `sensor.garage_door_operation_count_channel_1` | Sensor | Number of times channel 1 has opened |
+| `sensor.garage_door_operation_count_channel_1` | Sensor | Number of times channel 1 has opened (persisted across restarts) |
 | `sensor.garage_door_last_opened_channel_1` | Sensor | Timestamp of last channel 1 open |
 | `sensor.garage_door_last_closed_channel_1` | Sensor | Timestamp of last channel 1 close |
 
@@ -174,6 +184,16 @@ To update your device settings:
 4. Select **Reconfigure**
 5. Update your settings and click **Submit**
 
+## Diagnostics
+
+You can download a diagnostics report to help with troubleshooting:
+
+1. Go to **Settings** > **Devices & Services**
+2. Find the Remootio integration and click on the device
+3. Click the three dots menu and select **Download Diagnostics**
+
+The report includes relay state, update interval, and last update status. API keys are automatically redacted from the output.
+
 ## Troubleshooting
 
 ### Integration Not Found
@@ -199,13 +219,18 @@ After updating integration files on disk, Home Assistant must be **fully restart
 
 ### Door Status Not Updating
 
-The integration maintains a persistent WebSocket connection that receives `StateChange` events in real time (no polling delay). If the connection drops, it reconnects automatically with exponential backoff — you should see door state update within seconds of a reconnect without any manual intervention.
+The integration maintains a persistent WebSocket connection that receives `StateChange` events in real time. If the connection drops, it reconnects automatically with exponential backoff — door state should update within seconds of a reconnect.
+
+When the event listener is connected, the integration operates as pure push (`local_push`) with **no polling**. 30-second polling only activates as a fallback if the listener is not running (e.g., immediately after HA starts before the first connection is established, or during a reconnect window).
 
 If state stops updating:
 - Check Home Assistant logs for `remootio` — reconnect attempts are logged at warning level
 - Verify the Remootio device is online and reachable on port 8080
-- A 30-second polling fallback is always active, so state will self-correct even if the event listener is temporarily down
 - If the issue persists after several minutes, restart Home Assistant and remove/re-add the integration
+
+### Door Command (Open/Close) Timing Out
+
+The Remootio device only accepts one WebSocket connection at a time. When you open or close the door, the integration briefly pauses the event listener, sends the command on a dedicated connection, queries the resulting state, then restarts the listener. This takes 2–4 seconds. If you see timeout errors after commands, check that nothing else is holding a WebSocket connection to the device.
 
 ### Logs
 
@@ -224,10 +249,22 @@ logger:
 - Uses Remootio WebSocket API v3
 - AES-CBC encryption with PKCS7 padding
 - HMAC-SHA256 authentication
-- Challenge-response authentication flow
-- Session-based encryption keys
-- `local_push` integration: a persistent authenticated WebSocket connection receives `StateChange` events in real time; 30-second polling runs as a fallback
-- Automatic reconnection with exponential backoff (5s → 10s → … → 60s cap); replayed events from the device's 100-event buffer are deduplicated by event counter
+- Challenge-response authentication flow with per-session encryption keys
+- WebSocket protocol-level ping disabled — the Remootio device does not respond to pings
+
+### Connection Model
+- `local_push`: persistent authenticated WebSocket connection receives `StateChange` events in real time
+- When event listener is active, no polling occurs — the integration is pure push
+- 30-second polling activates only as a fallback when the listener is not connected
+- Trigger commands (open/close/toggle) temporarily pause the listener to get exclusive WebSocket access, then restart it
+
+### Reconnection
+- Exponential backoff: 5 s → 10 s → 20 s → … → 60 s cap
+- Events replayed from the device's 100-event buffer are deduplicated by event counter
+
+### Persistence
+- Operation count sensor (`RemootioOperationCountSensor`) uses `RestoreEntity` to survive HA restarts
+- All other sensor state is derived live from real-time events
 
 ### Dependencies
 - `cryptography` (included in Home Assistant Core)
@@ -236,8 +273,8 @@ logger:
 ### Security
 - All communication encrypted with AES-256
 - MAC validation on all frames
-- Local network only (no cloud required)
-- API keys stored securely in Home Assistant
+- Local network only — no cloud required
+- API keys stored securely in Home Assistant and redacted from diagnostics output
 
 ## Migration from YAML Configuration
 
