@@ -59,15 +59,22 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         )
 
     async def async_start_event_listener(self) -> None:
-        """Create and start the persistent WebSocket event listener."""
-        self._listener = RemootioEventListener(self.api, self._handle_event_state_change)
+        """Start the persistent WebSocket event listener.
+
+        The listener instance is created once and reused across restarts so
+        its event-counter dedup survives the stop/start cycle around TRIGGER
+        commands.
+        """
+        if self._listener is None:
+            self._listener = RemootioEventListener(
+                self.api, self._handle_event_state_change
+            )
         await self._listener.async_start()
 
     async def async_stop_event_listener(self) -> None:
         """Stop the persistent WebSocket event listener."""
         if self._listener:
             await self._listener.async_stop()
-            self._listener = None
 
     async def _handle_event_state_change(self, state: str) -> None:
         """Handle a real-time StateChange event from the listener."""
@@ -92,12 +99,14 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         The Remootio API has no QUERY_SECONDARY — QUERY always returns the
         primary output state.  Relay 2 (secondary) has no queryable state.
 
-        Skips the network call when the event listener is active: the device
-        only accepts one WebSocket connection at a time, so opening a second
-        connection for polling would time out while the listener holds the
-        persistent one.
+        Skips the network call while the event listener holds a live
+        connection: the device only accepts one WebSocket connection at a
+        time, so opening a second connection for polling would time out
+        while the listener holds the persistent one.  When the listener is
+        down or reconnecting, polling resumes as a fallback so the state
+        can never stay frozen indefinitely.
         """
-        if self._listener is not None:
+        if self._listener is not None and self._listener.connected:
             return dict(self._previous_states)
 
         try:
@@ -123,14 +132,17 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         return states
 
     async def async_trigger(self, relay_number: int) -> None:
-        """Send TRIGGER command and request a data refresh.
+        """Send TRIGGER command.
 
         Stops the event listener first so the TRIGGER gets exclusive WebSocket
-        access — the device rejects a second concurrent connection.
+        access — the device rejects a second concurrent connection.  No
+        explicit refresh is needed: the restarted listener queries the door
+        state as part of its connect handshake, which both syncs any change
+        caused by the trigger and avoids a polling connection racing the
+        listener's reconnect.
         """
         await self.async_stop_event_listener()
         try:
             await self.api.async_send_command("TRIGGER", relay_number)
-            await self.async_request_refresh()
         finally:
             await self.async_start_event_listener()

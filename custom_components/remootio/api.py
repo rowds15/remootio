@@ -59,6 +59,20 @@ def encrypt_frame(
     return {"iv": iv_b64, "payload": payload_b64, "mac": b64encode(mac).decode("utf-8")}
 
 
+def build_encrypted_message(
+    payload: dict, session_key_hex: str, auth_key: str
+) -> str:
+    """Encrypt *payload* and wrap it in the ENCRYPTED frame the device expects."""
+    encrypted = encrypt_frame(payload, session_key_hex, auth_key)
+    return json.dumps(
+        {
+            "type": "ENCRYPTED",
+            "data": {"iv": encrypted["iv"], "payload": encrypted["payload"]},
+            "mac": encrypted["mac"],
+        }
+    )
+
+
 def decrypt_frame(encrypted_frame: dict, key: str) -> dict | None:
     """Decrypt a frame using AES-CBC."""
     try:
@@ -89,10 +103,23 @@ class RemootioEventListener:
     a StateChange event arrives.  Reconnects automatically with exponential
     backoff.  Tracks event counters across reconnections to skip replayed
     events from the device's 100-event buffer.
+
+    The Remootio device does not answer WebSocket protocol-level ping frames,
+    so ``ping_interval`` is disabled (enabling it makes the ``websockets``
+    library declare a perfectly healthy connection dead every ping_timeout
+    seconds).  Instead the listener sends the device's own application-level
+    ``PING`` frame periodically to keep the session alive, and a watchdog
+    force-closes the connection if nothing at all — not even a reply — has
+    been heard for too long, so a silently-dropped TCP connection (e.g. a
+    Wi-Fi blip) can't block the read loop forever.  On every (re)connect the
+    listener sends a QUERY so state changes that happened while disconnected
+    are picked up immediately.
     """
 
     _BACKOFF_INITIAL = 5
     _BACKOFF_MAX = 60
+    _PING_INTERVAL = 45
+    _ACTIVITY_TIMEOUT = 90
 
     def __init__(
         self,
@@ -104,6 +131,13 @@ class RemootioEventListener:
         self._task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._last_event_cnt: int = -1
+        self._connected = False
+        self._last_activity: float = 0.0
+
+    @property
+    def connected(self) -> bool:
+        """Return True while the listener holds an authenticated connection."""
+        return self._connected
 
     async def async_start(self) -> None:
         """Start the background listener task."""
@@ -148,33 +182,98 @@ class RemootioEventListener:
         """Authenticate then consume events until the connection drops."""
         uri = f"ws://{self._api._host}:{self._api._port}"
         async with websockets.connect(uri, ping_interval=None) as websocket:
-            session_key_hex, _ = await self._api._async_authenticate(websocket)
+            session_key_hex, initial_action_id = await self._api._async_authenticate(
+                websocket
+            )
             _LOGGER.debug("Event listener authenticated to %s", self._api.host)
 
-            async for raw in websocket:
-                frame = json.loads(raw)
-                if frame.get("type") != "ENCRYPTED":
-                    continue
+            # Query current state so changes that happened while the listener
+            # was disconnected (e.g. during a TRIGGER command) are not missed.
+            query_payload = {
+                "action": {
+                    "type": "QUERY",
+                    "id": (initial_action_id + 1) % 0x7FFFFFFF,
+                }
+            }
+            await websocket.send(
+                build_encrypted_message(
+                    query_payload, session_key_hex, self._api._api_auth_key
+                )
+            )
 
-                decrypted = decrypt_frame(frame.get("data", frame), session_key_hex)
-                if not decrypted:
-                    continue
+            loop = asyncio.get_running_loop()
+            self._last_activity = loop.time()
+            watchdog_task = asyncio.ensure_future(self._keepalive_watchdog(websocket))
+            self._connected = True
+            try:
+                async for raw in websocket:
+                    self._last_activity = loop.time()
+                    frame = json.loads(raw)
+                    if frame.get("type") != "ENCRYPTED":
+                        continue
 
-                event = decrypted.get("event", {})
-                if event.get("type") != "StateChange":
-                    continue
+                    decrypted = decrypt_frame(frame.get("data", frame), session_key_hex)
+                    if not decrypted:
+                        continue
 
-                state = event.get("state")
-                if not state or state == "no sensor":
-                    continue
+                    response = decrypted.get("response")
+                    if response is not None:
+                        state = response.get("state")
+                        if state and state != "no sensor":
+                            await self._on_state_change(state)
+                        continue
 
-                cnt = event.get("cnt", -1)
-                # Skip replayed events; large backward jump means device restarted.
-                if cnt <= self._last_event_cnt and (self._last_event_cnt - cnt) < 50:
-                    continue
+                    event = decrypted.get("event", {})
+                    if event.get("type") != "StateChange":
+                        continue
 
-                self._last_event_cnt = cnt
-                await self._on_state_change(state)
+                    state = event.get("state")
+                    if not state or state == "no sensor":
+                        continue
+
+                    cnt = event.get("cnt", -1)
+                    # Skip replayed events; large backward jump means device restarted.
+                    if cnt <= self._last_event_cnt and (self._last_event_cnt - cnt) < 50:
+                        continue
+
+                    self._last_event_cnt = cnt
+                    await self._on_state_change(state)
+            finally:
+                self._connected = False
+                watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog_task
+
+    async def _keepalive_watchdog(self, websocket) -> None:
+        """Send application-level PINGs and force-close a silently-dead connection.
+
+        The device doesn't answer protocol-level WebSocket pings, so this is
+        the only way to detect a connection that has died without a clean
+        TCP close (e.g. the network dropped out from under it).  Any inbound
+        traffic — including the device's own PONG reply — resets the
+        activity clock via ``_connect_and_listen``'s read loop.
+        """
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(self._PING_INTERVAL)
+            idle = loop.time() - self._last_activity
+            if idle >= self._ACTIVITY_TIMEOUT:
+                _LOGGER.warning(
+                    "No response from Remootio at %s for %.0fs — closing stale connection",
+                    self._api.host,
+                    idle,
+                )
+                with contextlib.suppress(Exception):
+                    await websocket.close()
+                return
+            try:
+                await websocket.send(json.dumps({"type": "PING"}))
+            except Exception:
+                # Failed PING send means the connection is broken — close it
+                # so the read loop unblocks and the reconnect loop takes over.
+                with contextlib.suppress(Exception):
+                    await websocket.close()
+                return
 
 
 class RemootioAPI:
@@ -287,25 +386,17 @@ class RemootioAPI:
                     }
                 }
 
-                encrypted_command = encrypt_frame(
-                    command_payload, session_key_hex, self._api_auth_key
-                )
-                encrypted_message = {
-                    "type": "ENCRYPTED",
-                    "data": {
-                        "iv": encrypted_command["iv"],
-                        "payload": encrypted_command["payload"],
-                    },
-                    "mac": encrypted_command["mac"],
-                }
-
                 _LOGGER.debug(
                     "Command payload for relay %d: %s",
                     relay_number,
                     command_payload,
                 )
 
-                await websocket.send(json.dumps(encrypted_message))
+                await websocket.send(
+                    build_encrypted_message(
+                        command_payload, session_key_hex, self._api_auth_key
+                    )
+                )
                 _LOGGER.debug(
                     "Sent %s command (relay %d)", api_action_type, relay_number
                 )

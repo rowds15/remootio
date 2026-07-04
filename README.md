@@ -230,7 +230,7 @@ If state stops updating:
 
 ### Door Command (Open/Close) Timing Out
 
-The Remootio device only accepts one WebSocket connection at a time. When you open or close the door, the integration briefly pauses the event listener, sends the command on a dedicated connection, queries the resulting state, then restarts the listener. This takes 2–4 seconds. If you see timeout errors after commands, check that nothing else is holding a WebSocket connection to the device.
+The Remootio device only accepts one WebSocket connection at a time. When you open or close the door, the integration briefly pauses the event listener, sends the command on a dedicated connection, then restarts the listener — which re-queries the door state as part of its connect handshake, so any change caused by the command is picked up immediately. This takes 2–4 seconds. If you see timeout errors after commands, check that nothing else is holding a WebSocket connection to the device.
 
 ### Logs
 
@@ -251,6 +251,7 @@ logger:
 - HMAC-SHA256 authentication
 - Challenge-response authentication flow with per-session encryption keys
 - WebSocket protocol-level ping disabled — the Remootio device does not respond to pings
+- Application-level `PING` frame sent every 45 s to keep the device session alive; a watchdog force-closes the connection if nothing is received for 90 s, so a silently-dropped connection triggers a reconnect instead of hanging
 
 ### Connection Model
 - `local_push`: persistent authenticated WebSocket connection receives `StateChange` events in real time

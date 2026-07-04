@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from base64 import b64decode, b64encode
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -257,6 +258,119 @@ class TestRemootioEventListener:
         connect_ctx.__aenter__ = AsyncMock(return_value=ws_mock)
         connect_ctx.__aexit__ = AsyncMock(return_value=False)
         return connect_ctx
+
+    def _make_query_response_frame(self, state: str):
+        """Build an encrypted QUERY response frame."""
+        response_payload = {"response": {"type": "QUERY", "id": 1, "success": True, "state": state}}
+        enc = encrypt_frame(response_payload, TEST_SECRET_KEY, TEST_AUTH_KEY)
+        return json.dumps({
+            "type": "ENCRYPTED",
+            "data": {"iv": enc["iv"], "payload": enc["payload"]},
+            "mac": enc["mac"],
+        })
+
+    @pytest.mark.asyncio
+    async def test_sends_query_on_connect(self):
+        """The listener sends an encrypted QUERY right after authenticating."""
+        from custom_components.remootio.api import decrypt_frame
+        listener, callback = self._make_listener()
+        ws_mock = self._make_ws_mock([])
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        # send[0] is the AUTH frame; send[1] is the handshake QUERY.
+        sent = json.loads(ws_mock.send.await_args_list[1].args[0])
+        assert sent["type"] == "ENCRYPTED"
+        decrypted = decrypt_frame(sent["data"], TEST_SECRET_KEY)
+        assert decrypted == {"action": {"type": "QUERY", "id": 1}}
+
+    @pytest.mark.asyncio
+    async def test_delivers_query_response_state(self):
+        """A QUERY response frame delivers its state to the callback."""
+        listener, callback = self._make_listener()
+        ws_mock = self._make_ws_mock([self._make_query_response_frame("closed")])
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        callback.assert_awaited_once_with("closed")
+
+    @pytest.mark.asyncio
+    async def test_ignores_no_sensor_query_response(self):
+        """A QUERY response with 'no sensor' state is not delivered."""
+        listener, callback = self._make_listener()
+        ws_mock = self._make_ws_mock([self._make_query_response_frame("no sensor")])
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        callback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_connected_flag_lifecycle(self):
+        """connected is True while consuming events and False after disconnect."""
+        listener, _ = self._make_listener()
+        seen_connected = []
+
+        async def _record(state):
+            seen_connected.append(listener.connected)
+
+        listener._on_state_change = _record
+        ws_mock = self._make_ws_mock([self._make_state_change_frame("open", cnt=1)])
+
+        assert listener.connected is False
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            await listener._connect_and_listen()
+
+        assert seen_connected == [True]
+        assert listener.connected is False
+
+    @pytest.mark.asyncio
+    async def test_watchdog_sends_app_level_ping(self):
+        """The watchdog sends Remootio PING frames while the connection is active."""
+        listener, _ = self._make_listener()
+        listener._PING_INTERVAL = 0
+        listener._ACTIVITY_TIMEOUT = 9999
+        listener._last_activity = asyncio.get_running_loop().time()
+        ws_mock = AsyncMock()
+
+        task = asyncio.ensure_future(listener._keepalive_watchdog(ws_mock))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        ws_mock.send.assert_awaited_with(json.dumps({"type": "PING"}))
+        ws_mock.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_closes_stale_connection(self):
+        """No inbound traffic past the activity timeout closes the connection."""
+        listener, _ = self._make_listener()
+        listener._PING_INTERVAL = 0
+        listener._ACTIVITY_TIMEOUT = 0
+        listener._last_activity = 0.0
+        ws_mock = AsyncMock()
+
+        await listener._keepalive_watchdog(ws_mock)
+
+        ws_mock.close.assert_awaited_once()
+        ws_mock.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_closes_connection_on_ping_send_failure(self):
+        """A failed PING send closes the connection instead of leaking the error."""
+        listener, _ = self._make_listener()
+        listener._PING_INTERVAL = 0
+        listener._ACTIVITY_TIMEOUT = 9999
+        listener._last_activity = asyncio.get_running_loop().time()
+        ws_mock = AsyncMock()
+        ws_mock.send = AsyncMock(side_effect=OSError("broken pipe"))
+
+        await listener._keepalive_watchdog(ws_mock)
+
+        ws_mock.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_delivers_state_change_event(self):

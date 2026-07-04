@@ -40,6 +40,33 @@ class TestAsyncUpdateData:
         with pytest.raises(UpdateFailed):
             await mock_coordinator._async_update_data()
 
+    @pytest.mark.asyncio
+    async def test_update_skips_poll_while_listener_connected(self, mock_coordinator):
+        """A live event listener holds the only allowed connection — no poll."""
+        mock_coordinator._previous_states = {1: "open"}
+        mock_coordinator._listener = MagicMock(connected=True)
+        mock_coordinator.api.async_send_command = AsyncMock()
+
+        result = await mock_coordinator._async_update_data()
+
+        assert result == {1: "open"}
+        mock_coordinator.api.async_send_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_polls_when_listener_disconnected(self, mock_coordinator):
+        """Polling resumes as a fallback while the listener is reconnecting."""
+        mock_coordinator._previous_states = {1: "open"}
+        mock_coordinator._listener = MagicMock(connected=False)
+        mock_coordinator.api.async_send_command = AsyncMock(
+            return_value=make_query_response("closed")
+        )
+
+        with patch("custom_components.remootio.coordinator.async_dispatcher_send"):
+            result = await mock_coordinator._async_update_data()
+
+        assert result == {1: "closed"}
+        mock_coordinator.api.async_send_command.assert_awaited_once_with("QUERY", 1)
+
 
 class TestStateTransitionSignals:
     """Tests for dispatcher signal firing on state transitions."""
@@ -97,17 +124,32 @@ class TestAsyncTrigger:
 
     @pytest.mark.asyncio
     async def test_async_trigger(self, mock_coordinator):
-        """async_trigger sends TRIGGER command then requests refresh."""
-        mock_coordinator.api.async_send_command = AsyncMock(side_effect=[
-            None,  # TRIGGER command response (ignored)
-            make_query_response("open"),  # refresh: relay 1
-            make_query_response("closed"),  # refresh: relay 2
-        ])
+        """async_trigger stops the listener, sends TRIGGER, restarts the listener."""
+        mock_coordinator.api.async_send_command = AsyncMock(return_value=None)
+        mock_listener = MagicMock()
+        mock_listener.async_start = AsyncMock()
+        mock_listener.async_stop = AsyncMock()
+        mock_coordinator._listener = mock_listener
 
-        with patch("custom_components.remootio.coordinator.async_dispatcher_send"):
+        await mock_coordinator.async_trigger(1)
+
+        mock_coordinator.api.async_send_command.assert_awaited_once_with("TRIGGER", 1)
+        mock_listener.async_stop.assert_awaited_once()
+        mock_listener.async_start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_async_trigger_restarts_listener_on_command_error(self, mock_coordinator):
+        """Listener is restarted even when the TRIGGER command raises."""
+        mock_coordinator.api.async_send_command = AsyncMock(side_effect=OSError("boom"))
+        mock_listener = MagicMock()
+        mock_listener.async_start = AsyncMock()
+        mock_listener.async_stop = AsyncMock()
+        mock_coordinator._listener = mock_listener
+
+        with pytest.raises(OSError):
             await mock_coordinator.async_trigger(1)
 
-        mock_coordinator.api.async_send_command.assert_any_call("TRIGGER", 1)
+        mock_listener.async_start.assert_awaited_once()
 
 
 class TestEventListenerLifecycle:
@@ -132,8 +174,20 @@ class TestEventListenerLifecycle:
         assert mock_coordinator._listener is mock_listener
 
     @pytest.mark.asyncio
-    async def test_async_stop_event_listener_stops_and_clears(self, mock_coordinator):
-        """async_stop_event_listener stops the listener and sets _listener to None."""
+    async def test_async_start_event_listener_reuses_instance(self, mock_coordinator):
+        """A second start reuses the existing listener (keeps event-cnt dedup)."""
+        mock_listener = MagicMock()
+        mock_listener.async_start = AsyncMock()
+        mock_coordinator._listener = mock_listener
+
+        await mock_coordinator.async_start_event_listener()
+
+        assert mock_coordinator._listener is mock_listener
+        mock_listener.async_start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_async_stop_event_listener_stops_and_keeps_instance(self, mock_coordinator):
+        """async_stop_event_listener stops the listener but keeps the instance."""
         mock_listener = MagicMock()
         mock_listener.async_stop = AsyncMock()
         mock_coordinator._listener = mock_listener
@@ -141,7 +195,7 @@ class TestEventListenerLifecycle:
         await mock_coordinator.async_stop_event_listener()
 
         mock_listener.async_stop.assert_awaited_once()
-        assert mock_coordinator._listener is None
+        assert mock_coordinator._listener is mock_listener
 
     @pytest.mark.asyncio
     async def test_async_stop_event_listener_noop_when_none(self, mock_coordinator):
