@@ -69,9 +69,17 @@ class RemootioCover(CoordinatorEntity[RemootioCoordinator], CoverEntity):
         return state == "open"
 
     async def async_open_cover(self, **kwargs) -> None:
-        """Open the cover."""
-        await self.coordinator.async_trigger(self._relay_number)
+        """Open the cover.
+
+        Uses the directional OPEN command (not TRIGGER, which toggles) so
+        this is a no-op when the door is already open.
+        """
+        await self.coordinator.async_open(self._relay_number)
 
     async def async_close_cover(self, **kwargs) -> None:
-        """Close the cover."""
-        await self.coordinator.async_trigger(self._relay_number)
+        """Close the cover.
+
+        Uses the directional CLOSE command (not TRIGGER, which toggles) so
+        this is a no-op when the door is already closed.
+        """
+        await self.coordinator.async_close(self._relay_number)

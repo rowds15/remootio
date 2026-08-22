@@ -151,3 +151,26 @@ class TestDeviceInfoDelegation:
         ]
         for sensor in sensors:
             assert sensor.device_info is coordinator.device_info
+
+
+# ── Availability ──────────────────────────────────────────────────────────
+
+class TestAvailability:
+    """Sensors must go unavailable with the coordinator.
+
+    These sensors derive their value from dispatcher signals, not
+    coordinator.data, so nothing else would flip them unavailable during an
+    outage — see RemootioCoordinator._MAX_CONSECUTIVE_FAILURES.
+    """
+
+    def test_available_when_coordinator_healthy(self):
+        coordinator = _make_coordinator()
+        coordinator.last_update_success = True
+        sensor = RemootioOperationCountSensor(coordinator, 1)
+        assert sensor.available is True
+
+    def test_unavailable_when_coordinator_failed(self):
+        coordinator = _make_coordinator()
+        coordinator.last_update_success = False
+        sensor = RemootioOperationCountSensor(coordinator, 1)
+        assert sensor.available is False

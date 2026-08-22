@@ -14,6 +14,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SIGNAL_REMOOTIO_STATE_CHANGED
@@ -41,8 +42,17 @@ async def async_setup_entry(
     async_add_entities(sensors)
 
 
-class _RemootioSensorBase(SensorEntity):
-    """Base class for all Remootio sensor entities."""
+class _RemootioSensorBase(CoordinatorEntity[RemootioCoordinator], SensorEntity):
+    """Base class for all Remootio sensor entities.
+
+    Inherits from CoordinatorEntity (rather than plain SensorEntity) purely
+    for its ``available`` property — these sensors derive their own value
+    from dispatcher signals, not from ``coordinator.data``, but they still
+    must go unavailable when the coordinator does (see
+    RemootioCoordinator._MAX_CONSECUTIVE_FAILURES): otherwise they'd keep
+    reporting stale counts/timestamps as available through an outage that
+    correctly flips the cover/button entities unavailable.
+    """
 
     _attr_has_entity_name = True
 
@@ -54,7 +64,7 @@ class _RemootioSensorBase(SensorEntity):
         translation_key_prefix: str,
     ) -> None:
         """Initialize the sensor base."""
-        self._coordinator = coordinator
+        super().__init__(coordinator)
         self._relay_number = relay_number
         self._attr_unique_id = (
             f"remootio_{coordinator.host.replace('.', '_')}_{uid_suffix}_ch{relay_number}"
@@ -64,12 +74,12 @@ class _RemootioSensorBase(SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info for device registry."""
-        return self._coordinator.device_info
+        return self.coordinator.device_info
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to dispatcher signal for state transitions."""
         await super().async_added_to_hass()
-        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self._coordinator.host}_ch{self._relay_number}"
+        signal = f"{SIGNAL_REMOOTIO_STATE_CHANGED}_{self.coordinator.host}_ch{self._relay_number}"
         self.async_on_remove(
             async_dispatcher_connect(self.hass, signal, self._handle_state_changed)
         )
