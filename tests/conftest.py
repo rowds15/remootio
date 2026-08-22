@@ -185,6 +185,10 @@ class _CoordinatorEntity:
     def __class_getitem__(cls, item):
         return cls
 
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
 class _DataUpdateCoordinator:
     def __init__(self, hass, logger, *, name, update_interval):
         self.hass = hass
