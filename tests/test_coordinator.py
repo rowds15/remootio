@@ -24,13 +24,44 @@ class TestAsyncUpdateData:
 
     @pytest.mark.asyncio
     async def test_update_relay1_returns_none_falls_back_to_previous(self, mock_coordinator):
-        """When relay 1 returns None, falls back to previous state without raising."""
+        """A single soft failure falls back to previous state without raising."""
         mock_coordinator._previous_states = {1: "closed"}
         mock_coordinator.api.async_send_command = AsyncMock(return_value=None)
 
         result = await mock_coordinator._async_update_data()
 
         assert result == {1: "closed"}
+
+    @pytest.mark.asyncio
+    async def test_update_raises_after_max_consecutive_soft_failures(self, mock_coordinator):
+        """A None/empty response with no exception must eventually mark the
+        coordinator failed — otherwise a real outage (the device unreachable,
+        but async_send_command swallowing the error and returning None) never
+        raises UpdateFailed and entities stay available showing stale data
+        forever. Confirmed via a 45-hour real-world outage."""
+        mock_coordinator._previous_states = {1: "closed"}
+        mock_coordinator.api.async_send_command = AsyncMock(return_value=None)
+
+        for _ in range(mock_coordinator._MAX_CONSECUTIVE_FAILURES - 1):
+            result = await mock_coordinator._async_update_data()
+            assert result == {1: "closed"}  # still soft-failing, no raise yet
+
+        with pytest.raises(UpdateFailed):
+            await mock_coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_update_resets_failure_counter_on_success(self, mock_coordinator):
+        """A successful poll in between resets the consecutive-failure count,
+        so a single blip doesn't count towards the next outage's threshold."""
+        mock_coordinator._previous_states = {1: "closed"}
+        mock_coordinator.api.async_send_command = AsyncMock(
+            side_effect=[None, None, make_query_response("closed"), None, None]
+        )
+
+        for _ in range(5):
+            await mock_coordinator._async_update_data()
+
+        assert mock_coordinator._consecutive_failures == 2
 
     @pytest.mark.asyncio
     async def test_update_raises_update_failed_when_command_raises(self, mock_coordinator):
@@ -148,6 +179,59 @@ class TestAsyncTrigger:
 
         with pytest.raises(OSError):
             await mock_coordinator.async_trigger(1)
+
+        mock_listener.async_start.assert_awaited_once()
+
+
+class TestAsyncOpenClose:
+    """Tests for the coordinator's directional async_open/async_close methods.
+
+    OPEN/CLOSE gate on gate status in firmware (unlike TRIGGER, which just
+    toggles), so cover.py must use these instead of async_trigger for
+    open_cover/close_cover to be idempotent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_open_sends_open_command(self, mock_coordinator):
+        """async_open stops the listener, sends OPEN, restarts the listener."""
+        mock_coordinator.api.async_send_command = AsyncMock(return_value=None)
+        mock_listener = MagicMock()
+        mock_listener.async_start = AsyncMock()
+        mock_listener.async_stop = AsyncMock()
+        mock_coordinator._listener = mock_listener
+
+        await mock_coordinator.async_open(1)
+
+        mock_coordinator.api.async_send_command.assert_awaited_once_with("OPEN", 1)
+        mock_listener.async_stop.assert_awaited_once()
+        mock_listener.async_start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_async_close_sends_close_command(self, mock_coordinator):
+        """async_close stops the listener, sends CLOSE, restarts the listener."""
+        mock_coordinator.api.async_send_command = AsyncMock(return_value=None)
+        mock_listener = MagicMock()
+        mock_listener.async_start = AsyncMock()
+        mock_listener.async_stop = AsyncMock()
+        mock_coordinator._listener = mock_listener
+
+        await mock_coordinator.async_close(1)
+
+        mock_coordinator.api.async_send_command.assert_awaited_once_with("CLOSE", 1)
+        mock_listener.async_stop.assert_awaited_once()
+        mock_listener.async_start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_async_open_restarts_listener_on_command_error(self, mock_coordinator):
+        """Listener is restarted even when the OPEN command raises."""
+        mock_coordinator.api.async_send_command = AsyncMock(side_effect=OSError("boom"))
+        mock_listener = MagicMock()
+        mock_listener.async_start = AsyncMock()
+        mock_listener.async_stop = AsyncMock()
+        mock_coordinator._listener = mock_listener
+
+        with pytest.raises(OSError):
+            await mock_coordinator.async_open(1)
 
         mock_listener.async_start.assert_awaited_once()
 

@@ -16,6 +16,8 @@ def _make_coordinator(data=None):
     coordinator.data = data or {1: "open", 2: "closed"}
     coordinator.device_info = {"identifiers": {("remootio", TEST_HOST)}}
     coordinator.async_trigger = AsyncMock()
+    coordinator.async_open = AsyncMock()
+    coordinator.async_close = AsyncMock()
     return coordinator
 
 
@@ -41,20 +43,25 @@ class TestCoverState:
 
 
 class TestCoverActions:
+    """OPEN/CLOSE must be directional (async_open/async_close), not TRIGGER —
+    TRIGGER always toggles, so open_cover on an already-open door would close
+    it and vice versa. See coordinator.async_open/async_close."""
 
     @pytest.mark.asyncio
     async def test_async_open_cover(self):
         coordinator = _make_coordinator()
         cover = RemootioCover(coordinator, 1)
         await cover.async_open_cover()
-        coordinator.async_trigger.assert_called_once_with(1)
+        coordinator.async_open.assert_called_once_with(1)
+        coordinator.async_trigger.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_close_cover(self):
         coordinator = _make_coordinator()
         cover = RemootioCover(coordinator, 2)
         await cover.async_close_cover()
-        coordinator.async_trigger.assert_called_once_with(2)
+        coordinator.async_close.assert_called_once_with(2)
+        coordinator.async_trigger.assert_not_called()
 
 
 class TestCoverMetadata:
