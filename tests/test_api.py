@@ -117,6 +117,72 @@ class TestAsyncSendCommand:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_async_send_command_auth_send_hang_returns_none(self):
+        """A hung AUTH send (half-open TCP: the local socket accepts the
+        write but nothing ever reaches the peer) must not wedge the command
+        forever — it has to time out and return None like any other
+        communication failure."""
+        api = RemootioAPI(TEST_HOST, TEST_SECRET_KEY, TEST_AUTH_KEY)
+        api._AUTH_TIMEOUT = 0.01
+
+        async def _hang(*args, **kwargs):
+            await asyncio.sleep(9999)
+
+        ws_mock = AsyncMock()
+        ws_mock.send = _hang
+
+        mock_connect = AsyncMock()
+        mock_connect.__aenter__ = AsyncMock(return_value=ws_mock)
+        mock_connect.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=mock_connect):
+            result = await asyncio.wait_for(api.async_send_command("QUERY", 1), timeout=2)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_async_send_command_send_hang_returns_none(self):
+        """A hung command send (after authentication already succeeded)
+        must not wedge the command forever either."""
+        api = RemootioAPI(TEST_HOST, TEST_SECRET_KEY, TEST_AUTH_KEY)
+        api._COMMAND_TIMEOUT = 0.01
+
+        challenge_payload = {
+            "challenge": {
+                "sessionKey": b64encode(bytes.fromhex(TEST_SECRET_KEY)).decode(),
+                "initialActionId": 100,
+            }
+        }
+        encrypted_challenge = encrypt_frame(challenge_payload, TEST_SECRET_KEY, TEST_AUTH_KEY)
+        auth_response = {
+            "type": "ENCRYPTED",
+            "data": {"iv": encrypted_challenge["iv"], "payload": encrypted_challenge["payload"]},
+            "mac": encrypted_challenge["mac"],
+        }
+
+        call_count = 0
+
+        async def _send(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return  # AUTH frame send succeeds instantly.
+            await asyncio.sleep(9999)  # Command payload send hangs.
+
+        ws_mock = AsyncMock()
+        ws_mock.send = _send
+        ws_mock.recv = AsyncMock(return_value=json.dumps(auth_response))
+
+        mock_connect = AsyncMock()
+        mock_connect.__aenter__ = AsyncMock(return_value=ws_mock)
+        mock_connect.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("custom_components.remootio.api.websockets.connect", return_value=mock_connect):
+            result = await asyncio.wait_for(api.async_send_command("QUERY", 1), timeout=2)
+
+        assert result is None
+
 
 # ── async_validate_connection ──────────────────────────────────────────────
 
@@ -371,6 +437,94 @@ class TestRemootioEventListener:
         await listener._keepalive_watchdog(ws_mock)
 
         ws_mock.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_ping_send_hang_is_bounded_and_aborts(self):
+        """A PING send that never returns (half-open TCP: the local socket
+        accepts the write but the peer is gone) must not wedge the watchdog
+        forever. It has to time out and force the connection closed so the
+        read loop it guards can't be left hanging indefinitely too."""
+        listener, _ = self._make_listener()
+        listener._PING_INTERVAL = 0
+        listener._ACTIVITY_TIMEOUT = 9999
+        listener._IO_TIMEOUT = 0.01
+        listener._last_activity = asyncio.get_running_loop().time()
+
+        async def _hang(*args, **kwargs):
+            await asyncio.sleep(9999)
+
+        ws_mock = AsyncMock()
+        ws_mock.send = _hang
+        ws_mock.transport = MagicMock()
+
+        await asyncio.wait_for(listener._keepalive_watchdog(ws_mock), timeout=2)
+
+        ws_mock.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_close_hang_falls_back_to_transport_abort(self):
+        """If the graceful close of a stale connection also hangs (same
+        half-open socket — closing writes a frame too), the watchdog must
+        fall back to aborting the transport directly instead of waiting
+        forever for a close handshake reply that will never arrive."""
+        listener, _ = self._make_listener()
+        listener._PING_INTERVAL = 0
+        listener._ACTIVITY_TIMEOUT = 0
+        listener._IO_TIMEOUT = 0.01
+        listener._last_activity = 0.0
+
+        async def _hang(*args, **kwargs):
+            await asyncio.sleep(9999)
+
+        ws_mock = AsyncMock()
+        ws_mock.close = _hang
+        ws_mock.transport = MagicMock()
+
+        await asyncio.wait_for(listener._keepalive_watchdog(ws_mock), timeout=2)
+
+        ws_mock.transport.abort.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handshake_query_send_hang_times_out(self):
+        """The post-auth handshake QUERY send (line right after
+        _async_authenticate) happens before the watchdog task is even
+        created, so nothing else bounds it — a stuck send here must still
+        raise within _IO_TIMEOUT rather than wedging the reconnect loop
+        with no watchdog around to rescue it."""
+        listener, _ = self._make_listener()
+        listener._IO_TIMEOUT = 0.01
+
+        call_count = 0
+
+        async def _send(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return  # AUTH frame send succeeds instantly.
+            await asyncio.sleep(9999)  # Handshake QUERY send hangs.
+
+        ws_mock = AsyncMock()
+        ws_mock.send = _send
+        ws_mock.recv = AsyncMock(return_value=self._make_auth_response())
+        ws_mock.__aiter__ = MagicMock(return_value=AsyncIterMock([]))
+
+        start = asyncio.get_running_loop().time()
+        with patch("custom_components.remootio.api.websockets.connect", return_value=self._make_connect_ctx(ws_mock)):
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(listener._connect_and_listen(), timeout=5)
+        elapsed = asyncio.get_running_loop().time() - start
+
+        assert elapsed < 1
+
+    @pytest.mark.asyncio
+    async def test_seconds_idle_reflects_time_since_last_activity(self):
+        """seconds_idle reports elapsed time since the last inbound frame —
+        the coordinator uses this to distinguish a live listener from one
+        that still reports connected but has silently stopped receiving."""
+        listener, _ = self._make_listener()
+        listener._last_activity = asyncio.get_running_loop().time() - 5
+
+        assert listener.seconds_idle >= 5
 
     @pytest.mark.asyncio
     async def test_delivers_state_change_event(self):

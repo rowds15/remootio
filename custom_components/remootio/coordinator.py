@@ -35,8 +35,10 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
     - ``_MAX_CONSECUTIVE_FAILURES`` below is a poll-count threshold that
       decides when *entities* should stop trusting the cached state and go
       unavailable. It only applies to the polling fallback path, since a
-      connected listener already proves liveness on its own (see
-      ``_async_update_data``).
+      connected *and recently active* listener already proves liveness on
+      its own (see ``_async_update_data``) — ``_STALE_LISTENER_SECONDS`` is
+      what "recently active" means, because ``connected`` by itself isn't
+      trustworthy indefinitely (see below).
     """
 
     # RemootioAPI.async_send_command swallows most communication errors
@@ -54,6 +56,17 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
     # deliberately raises UpdateFailed immediately rather than waiting out
     # this same tolerance window.
     _MAX_CONSECUTIVE_FAILURES = 3
+
+    # A half-open TCP connection can leave the listener's `connected` flag
+    # stuck True long after it has actually stopped receiving anything — the
+    # local socket keeps accepting writes even though nothing more will ever
+    # arrive from the peer. `connected` alone can't be trusted forever, so
+    # once a nominally-connected listener has been silent for this long,
+    # polling resumes despite it. Matches the listener's own
+    # `_ACTIVITY_TIMEOUT` (api.py) — its watchdog should have already forced
+    # a reconnect by this point; this is the independent backstop for the
+    # case where it hasn't.
+    _STALE_LISTENER_SECONDS = 90
 
     def __init__(
         self,
@@ -142,12 +155,15 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         The Remootio API has no QUERY_SECONDARY — QUERY always returns the
         primary output state.  Relay 2 (secondary) has no queryable state.
 
-        Skips the network call while the event listener holds a live
-        connection: the device only accepts one WebSocket connection at a
-        time, so opening a second connection for polling would time out
-        while the listener holds the persistent one.  When the listener is
-        down or reconnecting, polling resumes as a fallback so the state
-        can never stay frozen indefinitely.
+        Skips the network call while the event listener holds a live,
+        recently-active connection: the device only accepts one WebSocket
+        connection at a time, so opening a second connection for polling
+        would time out while the listener holds the persistent one.  When
+        the listener is down, reconnecting, or reports connected but hasn't
+        received anything in over ``_STALE_LISTENER_SECONDS`` (a half-open
+        TCP connection can leave ``connected`` stuck True long after it's
+        actually stopped delivering anything), polling resumes as a
+        fallback so the state can never stay frozen indefinitely.
 
         A missing/invalid response is tolerated for up to
         ``_MAX_CONSECUTIVE_FAILURES`` consecutive polls (a transient blip
@@ -157,10 +173,17 @@ class RemootioCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
         state through an extended outage.
         """
         if self._listener is not None and self._listener.connected:
-            # A live, authenticated listener connection is itself proof the
-            # device is reachable right now.
-            self._consecutive_failures = 0
-            return dict(self._previous_states)
+            if self._listener.seconds_idle < self._STALE_LISTENER_SECONDS:
+                # A live, authenticated listener connection is itself proof
+                # the device is reachable right now.
+                self._consecutive_failures = 0
+                return dict(self._previous_states)
+            _LOGGER.warning(
+                "Event listener for %s reports connected but has received "
+                "nothing for %.0fs — polling despite the connected flag",
+                self.api.host,
+                self._listener.seconds_idle,
+            )
 
         if self._command_lock.locked():
             # An exclusive command (TRIGGER/OPEN/CLOSE) currently has the

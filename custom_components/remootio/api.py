@@ -120,6 +120,7 @@ class RemootioEventListener:
     _BACKOFF_MAX = 60
     _PING_INTERVAL = 45
     _ACTIVITY_TIMEOUT = 90
+    _IO_TIMEOUT = 10
 
     def __init__(
         self,
@@ -138,6 +139,18 @@ class RemootioEventListener:
     def connected(self) -> bool:
         """Return True while the listener holds an authenticated connection."""
         return self._connected
+
+    @property
+    def seconds_idle(self) -> float:
+        """Return seconds since the last inbound frame from the device.
+
+        The coordinator uses this alongside ``connected`` — a connection can
+        go half-open (the local socket accepts writes but the peer is gone)
+        without ``connected`` ever flipping False, so callers that need to
+        know whether the listener is *actually* live, not just nominally
+        connected, should check this too.
+        """
+        return asyncio.get_running_loop().time() - self._last_activity
 
     async def async_start(self) -> None:
         """Start the background listener task."""
@@ -195,10 +208,17 @@ class RemootioEventListener:
                     "id": (initial_action_id + 1) % 0x7FFFFFFF,
                 }
             }
-            await websocket.send(
-                build_encrypted_message(
-                    query_payload, session_key_hex, self._api._api_auth_key
-                )
+            # No watchdog is running yet at this point (it starts below),
+            # so this send has nothing else bounding it — a half-open
+            # connection here would wedge the reconnect loop before it even
+            # gets a chance to run one.
+            await asyncio.wait_for(
+                websocket.send(
+                    build_encrypted_message(
+                        query_payload, session_key_hex, self._api._api_auth_key
+                    )
+                ),
+                timeout=self._IO_TIMEOUT,
             )
 
             loop = asyncio.get_running_loop()
@@ -263,17 +283,40 @@ class RemootioEventListener:
                     self._api.host,
                     idle,
                 )
-                with contextlib.suppress(Exception):
-                    await websocket.close()
+                await self._force_close(websocket)
                 return
             try:
-                await websocket.send(json.dumps({"type": "PING"}))
+                await asyncio.wait_for(
+                    websocket.send(json.dumps({"type": "PING"})),
+                    timeout=self._IO_TIMEOUT,
+                )
             except Exception:
-                # Failed PING send means the connection is broken — close it
-                # so the read loop unblocks and the reconnect loop takes over.
-                with contextlib.suppress(Exception):
-                    await websocket.close()
+                # Failed OR stuck PING send means the connection is broken —
+                # force it closed so the read loop unblocks and the
+                # reconnect loop takes over.
+                await self._force_close(websocket)
                 return
+
+    async def _force_close(self, websocket) -> None:
+        """Guarantee the connection actually terminates.
+
+        A half-open TCP connection — the local socket keeps accepting writes
+        into its send buffer even though nothing ever reaches or comes back
+        from the peer — can make a graceful ``close()`` hang exactly the way
+        ``send()`` does, since closing writes a frame too and waits for the
+        peer's reply.  Bound it with the same timeout as PING, and if even
+        that doesn't return in time, abort the transport directly — a local,
+        synchronous operation that can't block on the network — rather than
+        leave the watchdog (and the read loop it exists to unblock) stuck
+        forever.
+        """
+        try:
+            await asyncio.wait_for(websocket.close(), timeout=self._IO_TIMEOUT)
+        except Exception:
+            transport = getattr(websocket, "transport", None)
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    transport.abort()
 
 
 class RemootioAPI:
@@ -284,6 +327,14 @@ class RemootioAPI:
     limited embedded system where persistent connections add complexity for
     marginal benefit.
     """
+
+    # Bounds for every send/recv in the auth and command exchange. A bare
+    # ``send()`` can hang as easily as ``recv()`` on a half-open TCP
+    # connection (the local socket accepts the write; nothing ever reaches
+    # or comes back from the peer), so both directions get the same timeout
+    # around each step — see RemootioEventListener for the same pattern.
+    _AUTH_TIMEOUT = 10
+    _COMMAND_TIMEOUT = 5
 
     def __init__(
         self,
@@ -311,10 +362,12 @@ class RemootioAPI:
         Raises CannotConnect or InvalidAuth on failure.
         """
         auth_payload = {"type": "AUTH"}
-        await websocket.send(json.dumps(auth_payload))
+        await asyncio.wait_for(
+            websocket.send(json.dumps(auth_payload)), timeout=self._AUTH_TIMEOUT
+        )
         _LOGGER.debug("Sent AUTH frame")
 
-        response = await asyncio.wait_for(websocket.recv(), timeout=10)
+        response = await asyncio.wait_for(websocket.recv(), timeout=self._AUTH_TIMEOUT)
         auth_response = json.loads(response)
         _LOGGER.debug("Received auth response type: %s", auth_response.get("type"))
 
@@ -392,16 +445,21 @@ class RemootioAPI:
                     command_payload,
                 )
 
-                await websocket.send(
-                    build_encrypted_message(
-                        command_payload, session_key_hex, self._api_auth_key
-                    )
+                await asyncio.wait_for(
+                    websocket.send(
+                        build_encrypted_message(
+                            command_payload, session_key_hex, self._api_auth_key
+                        )
+                    ),
+                    timeout=self._COMMAND_TIMEOUT,
                 )
                 _LOGGER.debug(
                     "Sent %s command (relay %d)", api_action_type, relay_number
                 )
 
-                response = await asyncio.wait_for(websocket.recv(), timeout=5)
+                response = await asyncio.wait_for(
+                    websocket.recv(), timeout=self._COMMAND_TIMEOUT
+                )
                 result = json.loads(response)
                 _LOGGER.debug("Command response: %s", result)
 

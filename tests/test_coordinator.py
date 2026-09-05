@@ -106,7 +106,7 @@ class TestAsyncUpdateData:
     async def test_update_skips_poll_while_listener_connected(self, mock_coordinator):
         """A live event listener holds the only allowed connection — no poll."""
         mock_coordinator._previous_states = {1: "open"}
-        mock_coordinator._listener = MagicMock(connected=True)
+        mock_coordinator._listener = MagicMock(connected=True, seconds_idle=0)
         mock_coordinator.api.async_send_command = AsyncMock()
 
         result = await mock_coordinator._async_update_data()
@@ -122,11 +122,33 @@ class TestAsyncUpdateData:
         the unavailable threshold on what's really the first real failure."""
         mock_coordinator._previous_states = {1: "open"}
         mock_coordinator._consecutive_failures = 2
-        mock_coordinator._listener = MagicMock(connected=True)
+        mock_coordinator._listener = MagicMock(connected=True, seconds_idle=0)
 
         await mock_coordinator._async_update_data()
 
         assert mock_coordinator._consecutive_failures == 0
+
+    @pytest.mark.asyncio
+    async def test_update_polls_when_listener_connected_but_stale(self, mock_coordinator):
+        """A listener that still reports connected but has received nothing
+        for longer than the stale threshold must not block polling — a
+        half-open TCP connection can leave 'connected' stuck True long after
+        the listener has actually stopped delivering anything. Polling is
+        the only mechanism left that can notice and recover."""
+        mock_coordinator._previous_states = {1: "open"}
+        mock_coordinator._listener = MagicMock(
+            connected=True,
+            seconds_idle=mock_coordinator._STALE_LISTENER_SECONDS + 1,
+        )
+        mock_coordinator.api.async_send_command = AsyncMock(
+            return_value=make_query_response("closed")
+        )
+
+        with patch("custom_components.remootio.coordinator.async_dispatcher_send"):
+            result = await mock_coordinator._async_update_data()
+
+        assert result == {1: "closed"}
+        mock_coordinator.api.async_send_command.assert_awaited_once_with("QUERY", 1)
 
     @pytest.mark.asyncio
     async def test_update_skips_poll_while_command_lock_held(self, mock_coordinator):
